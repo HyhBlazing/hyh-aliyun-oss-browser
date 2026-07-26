@@ -1,6 +1,25 @@
 {
   "name": "oss-browser",
   "version": "2.0.0",
+  "description": "非官方定制的阿里云 OSS 桌面客户端，基于 aliyun/oss-browser（Apache-2.0）",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/HyhBlazing/hyh-aliyun-oss-browser.git"
+  },
+  "bugs": {
+    "url": "https://github.com/HyhBlazing/hyh-aliyun-oss-browser/issues"
+  },
+  "homepage": "https://github.com/HyhBlazing/hyh-aliyun-oss-browser",
+  "keywords": [
+    "aliyun",
+    "oss",
+    "oss-browser",
+    "electron",
+    "object-storage",
+    "阿里云",
+    "对象存储"
+  ],
   "main": "dist/main.js",
   "scripts": {
     "test": "ava test",

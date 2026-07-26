@@ -1,0 +1,29 @@
+OSS Browser Custom (hyh-aliyun-oss-browser)
+===========================================
+
+This project is a derivative work based on the open-source project:
+
+  aliyun/oss-browser
+  https://github.com/aliyun/oss-browser
+
+Original Work
+-------------
+Copyright 2016 Aliyun.com
+Licensed under the Apache License, Version 2.0
+
+Modifications
+-------------
+Copyright 2026 HyhBlazing
+UI/UX customizations, Chinese-only localization, removal of auto-upgrade,
+settings adjustments, and packaging scripts for this repository.
+
+Disclaimer
+----------
+This repository is an independent community / personal customization.
+It is NOT an official product of Alibaba Cloud / Aliyun.
+"阿里云", "Alibaba Cloud", "OSS" and related names are trademarks of
+their respective owners. Use of those names is only for describing
+compatibility and origin of the upstream project.
+
+Third-party dependencies retain their own licenses as declared in
+their respective packages.

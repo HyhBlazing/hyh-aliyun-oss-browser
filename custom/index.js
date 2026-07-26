@@ -11,7 +11,7 @@ module.exports = {
   version: "2.0.0",
 
   //app名称
-  appName: "OSS浏览器",
+  appName: "OSS浏览器（定制版）",
 
   //logo png 格式, 主要用于mac和linux系统
   logo_png: path.join(__dirname, "./icon.png"),
@@ -23,5 +23,10 @@ module.exports = {
   logo_ico: path.join(__dirname, "./icon.ico"),
 
   //“关于”弹窗的主要内容
-  //about_html: '<div>开源地址:</div>',
+  about_html:
+    '<div style="line-height:1.6;color:#666;font-size:12px;">' +
+    "<div>基于开源项目 aliyun/oss-browser 定制，非阿里云官方产品。</div>" +
+    '<div>开源协议：Apache License 2.0</div>' +
+    '<div>仓库：https://github.com/HyhBlazing/hyh-aliyun-oss-browser</div>' +
+    "</div>",
 };
