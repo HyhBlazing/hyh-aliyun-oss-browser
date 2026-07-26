@@ -1,0 +1,228 @@
+.trans-dock-btn {
+  position: fixed;
+  right: 16px;
+  bottom: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  height: 36px;
+  min-width: 0;
+  padding: 0 14px;
+  border: 1px solid #e4e7ec;
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  background: #ffffff;
+  color: #667085;
+  box-shadow: 0 -2px 8px rgba(16, 24, 40, 0.05);
+  line-height: 1;
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    opacity 0.15s ease;
+}
+
+.trans-dock-btn.is-idle {
+  opacity: 0.72;
+  color: #98a2b3;
+  background: #f9fafb;
+  border-color: #eaecf0;
+  box-shadow: none;
+}
+
+.trans-dock-btn.is-busy {
+  opacity: 1;
+  color: #475467;
+  background: #ffffff;
+  border-color: #d0d5dd;
+  box-shadow: 0 -4px 12px rgba(16, 24, 40, 0.08);
+}
+
+.trans-dock-link {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.trans-dock-link + .trans-dock-link {
+  margin-left: 16px;
+}
+
+.trans-dock-link:hover,
+.trans-dock-link:focus {
+  color: #344054;
+  outline: none;
+}
+
+.trans-dock-btn.is-idle .trans-dock-link:hover,
+.trans-dock-btn.is-idle .trans-dock-link:focus {
+  color: #667085;
+}
+
+.trans-dock-link i {
+  font-size: 13px;
+  color: inherit;
+}
+
+.trans-dock-link i + span {
+  margin-left: 8px;
+}
+
+.trans-frame {
+  position: fixed;
+  bottom: 0;
+  right: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  width: 600px;
+  height: 420px;
+  overflow: hidden;
+  border: 0.5px solid rgba(60, 60, 67, 0.12);
+  border-bottom: none;
+  border-radius: 12px 12px 0 0;
+  background: #f5f5f7;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.15);
+}
+
+.trans-frame-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+  padding: 10px 12px;
+  border-bottom: 0.5px solid rgba(60, 60, 67, 0.12);
+  background: #f5f5f7;
+}
+
+.trans-segmented {
+  display: inline-flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 320px;
+  padding: 2px;
+  border: 0.5px solid rgba(60, 60, 67, 0.08);
+  border-radius: 8px;
+  background: #e8e8ed;
+}
+
+.trans-segment-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1 1 0;
+  min-width: 0;
+  height: 28px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: rgba(60, 60, 67, 0.6);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.trans-segment-btn .trans-segment-label + .trans-segment-count {
+  margin-left: 6px;
+}
+
+.trans-segment-btn:hover:not(.is-active) {
+  color: rgba(60, 60, 67, 0.85);
+}
+
+.trans-segment-btn:focus,
+.trans-segment-btn:focus-visible,
+.trans-segment-btn:active {
+  outline: none !important;
+  outline-offset: 0 !important;
+  box-shadow: none;
+}
+
+.trans-segment-btn.is-active {
+  background: #ffffff;
+  color: #1d1d1f;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.trans-segment-btn.is-active:focus,
+.trans-segment-btn.is-active:focus-visible,
+.trans-segment-btn.is-active:active {
+  outline: none !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.trans-segment-label {
+  flex-shrink: 0;
+}
+
+.trans-segment-count {
+  flex-shrink: 0;
+  min-width: 28px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(60, 60, 67, 0.08);
+  color: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.trans-segment-btn.is-active .trans-segment-count {
+  background: rgba(60, 60, 67, 0.1);
+  color: #1d1d1f;
+}
+
+.trans-frame-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(60, 60, 67, 0.6);
+  cursor: pointer;
+}
+
+.trans-frame-close:hover,
+.trans-frame-close:focus {
+  background: rgba(0, 0, 0, 0.06);
+  color: #1d1d1f;
+  outline: none;
+}
+
+.trans-frame-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.list-condensed .col-sm-4 {
+  padding: 1px;
+}

@@ -1,0 +1,26 @@
+<div class="modal-header">
+  <button type="button" class="close" ng-click="cancel()">
+    <span aria-hidden="true">&times;</span>
+  </button>
+  <h4 class="modal-title">
+    {{'about'|translate}}
+  </h4>
+</div>
+<div class="modal-body">
+  <h4 class="text-center">
+    <img ng-src="{{app_logo}}" style="display: inline-block;" width="40" />
+    &nbsp;&nbsp;{{'app.name'|translate}}
+    <small class="text-orange">v {{info.currentVersion}}</small>
+
+    <div ng-if="custom_about_html" ng-bind-html="custom_about_html"></div>
+
+    <div class="pd4" ng-if="!custom_about_html">
+      <small class="text-muted">
+        {{'opensource.address'|translate}}:
+        <a href="" ng-click="open('https://github.com/aliyun/oss-browser')"
+          >https://github.com/aliyun/oss-browser</a
+        >
+      </small>
+    </div>
+  </h4>
+</div>

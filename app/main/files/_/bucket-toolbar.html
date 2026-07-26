@@ -1,0 +1,84 @@
+<header class="action-bar bucket-toolbar">
+  <div class="action-bar-left">
+    <button
+      type="button"
+      class="secondary-button"
+      ng-disabled="!bucket_sel.item"
+      ng-click="showBucketMultipart(bucket_sel.item)"
+    >
+      <i class="fa fa-copy" aria-hidden="true"></i>
+      {{'bucket.multipart'|translate}}
+    </button>
+
+    <div class="btn-group action-more" role="group">
+      <button
+        type="button"
+        class="secondary-button dropdown-toggle"
+        data-toggle="dropdown"
+      >
+        {{'more'|translate}}
+        <i class="fa fa-angle-down action-more-caret" aria-hidden="true"></i>
+      </button>
+      <ul class="dropdown-menu" role="menu">
+        <li ng-if="isNonStsAuth()">
+          <a href="" ng-click="showAddBucket()">
+            <i class="glyphicon glyphicon-plus text-success"></i>
+            {{'bucket.add'|translate}}
+          </a>
+        </li>
+        <li
+          class="divider"
+          ng-if="isNonStsAuth()"
+          role="separator"
+        ></li>
+        <li ng-class="{disabled: !bucket_sel.item}" role="menuitem">
+          <a
+            href=""
+            tabindex="-1"
+            ng-click="bucket_sel.item && showUpdateBucket(bucket_sel.item)"
+          >
+            <i class="fa fa-shield text-success"></i>
+            {{'acl'|translate}}
+          </a>
+        </li>
+        <li ng-class="{disabled: !bucket_sel.item}" role="menuitem">
+          <a
+            href=""
+            tabindex="-1"
+            ng-click="bucket_sel.item && showGrant([bucket_sel.item])"
+          >
+            <i class="fa fa-shield text-warning"></i>
+            {{'simplePolicy'|translate}}
+          </a>
+        </li>
+        <li class="divider" role="separator"></li>
+        <li ng-class="{disabled: !bucket_sel.item}" role="menuitem">
+          <a
+            href=""
+            tabindex="-1"
+            ng-click="bucket_sel.item && showDeleteBucket(bucket_sel.item)"
+          >
+            <i class="fa fa-remove text-danger"></i>
+            {{'delete'|translate}}
+          </a>
+        </li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="action-bar-right">
+    <span class="bucket-count-label">
+      共 {{(buckets|filter:sch.bucketName).length}} 个 Bucket
+    </span>
+    <div class="search-field bucket-name-search">
+      <i class="fa fa-search search-field-icon" aria-hidden="true"></i>
+      <input
+        type="text"
+        ng-model="sch.bucketName"
+        class="form-control search-field-input"
+        cleanable-input
+        placeholder="搜索 Bucket 名称"
+      />
+    </div>
+  </div>
+</header>

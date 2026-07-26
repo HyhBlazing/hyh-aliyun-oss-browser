@@ -1,0 +1,29 @@
+开发：
+第一个进程：node node_modules\gulp\bin\gulp.js watch --custom=./custom
+第二个进程：$env:NODE_ENV="development"; node_modules\electron\dist\electron.exe .
+
+终端 1：监听并编译
+node node_modules\gulp\bin\gulp.js watch --custom=./custom
+
+终端 2：启动 Electron（只开一次）
+$env:NODE_ENV="development"; node_modules\electron\dist\electron.exe .
+
+
+编译：
+cd F:\desk\oss-browser-1.18.0
+
+# 1. 完整编译（含 dist 依赖安装）
+npx gulp build --custom=./custom
+node gen.js
+
+# 2. 确认依赖存在
+Test-Path dist\node_modules\electron-log   # 应为 True
+
+# 3. 打包
+$env:ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/"
+node node_modules/electron-packager/cli.js ./dist oss-browser `
+  --asar "--asar-unpack=*.node" --overwrite --out=build `
+  --version=1.8.4 --app-version=1.18.0 --platform=win32 --arch=x64
+
+# 4. 复制自定义配置
+Copy-Item -Recurse -Force custom build\oss-browser-win32-x64\resources\custom

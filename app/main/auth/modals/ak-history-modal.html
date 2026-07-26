@@ -1,0 +1,81 @@
+<div class="ak-history-modal">
+  <div class="modal-header ak-history-modal-header">
+    <h4 class="modal-title">{{'auth.akHistories'|translate}}</h4>
+    <div class="ak-history-header-actions">
+      <button
+        type="button"
+        class="btn btn-link login-history-clear"
+        ng-click="showCleanHistories()"
+        ng-disabled="!his.length"
+      >
+        {{'auth.clearHistories'|translate}}
+      </button>
+      <button type="button" class="close" ng-click="cancel()">
+        <span aria-hidden="true">&times;</span>
+      </button>
+    </div>
+  </div>
+  <div class="modal-body mac-scroll">
+    <p class="ak-history-hint">{{'auth.akHistories.hint'|translate}}</p>
+
+    <div ng-if="!his.length" no-data></div>
+
+    <div ng-if="his.length" class="login-history-table-wrap mac-scroll">
+      <table class="table login-history-table">
+        <thead>
+          <tr>
+            <th class="login-history-col-index">#</th>
+            <th>ID</th>
+            <th>Secret</th>
+            <th>{{'auth.description'|translate}}</th>
+            <th class="login-history-col-actions">{{'actions'|translate}}</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            ng-repeat="h in his"
+            class="ak-history-row"
+            ng-click="selectHis(h)"
+          >
+            <td class="login-history-col-index">{{$index+1}}</td>
+            <td class="login-history-cell-mono truncate">{{h.id}}</td>
+            <td class="login-history-cell-mono truncate">{{h.secret|hideSecret}}</td>
+            <td class="ak-history-desc" ng-click="$event.stopPropagation()">
+              <input
+                type="text"
+                class="form-control input-sm ak-history-desc-input"
+                ng-model="h.desc"
+                maxlength="30"
+                ng-focus="onDescFocus(h)"
+                ng-blur="saveDesc(h)"
+                ng-keydown="$event.stopPropagation()"
+                placeholder="{{'auth.description.placeholder'|translate}}"
+              />
+            </td>
+            <td class="login-history-actions">
+              <button
+                type="button"
+                class="btn btn-primary btn-xs"
+                ng-click="selectHis(h); $event.stopPropagation();"
+              >
+                {{'use'|translate}}
+              </button>
+              <button
+                type="button"
+                class="btn btn-danger btn-xs"
+                ng-click="showRemoveHis(h); $event.stopPropagation();"
+              >
+                {{'delete'|translate}}
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="modal-footer">
+    <button type="button" class="btn btn-default btn-sm" ng-click="cancel()">
+      {{'close'|translate}}
+    </button>
+  </div>
+</div>

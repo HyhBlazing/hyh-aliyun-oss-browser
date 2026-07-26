@@ -1,0 +1,48 @@
+<div
+  class="top-user-menu dropdown"
+  uib-dropdown
+  is-open="userMenuOpen"
+  auto-close="outsideClick"
+>
+  <a href="" class="meta-button user-menu-trigger" uib-dropdown-toggle>
+    <span class="user-avatar" aria-hidden="true">
+      <i class="fa fa-user"></i>
+    </span>
+    <span ng-if="authInfo.expiration" class="user-name">
+      <span ng-if="!authInfo.desc">{{'tempCert'|translate}}</span>
+      <span ng-if="authInfo.desc">{{authInfo.desc}}</span>
+    </span>
+    <span ng-if="!authInfo.expiration" class="user-name">
+      <span ng-if="authInfo.desc">{{authInfo.desc}}</span>
+      <span ng-if="!authInfo.desc">{{authInfo.id}}</span>
+    </span>
+    <i class="fa fa-angle-down user-caret" aria-hidden="true"></i>
+  </a>
+  <ul class="dropdown-menu top-user-dropdown" uib-dropdown-menu role="menu">
+    <li role="none">
+      <a href="" role="menuitem" ng-click="showSettings()">
+        <i class="fa fa-cog"></i>
+        {{'settings'|translate}}
+      </a>
+    </li>
+    <li ng-if="authInfo.id.indexOf('STS.')!=0" role="none">
+      <a href="" role="menuitem" ng-click="showUserList()">
+        <i class="fa fa-users"></i>
+        {{'users'|translate}}
+      </a>
+    </li>
+    <li role="none">
+      <a href="" role="menuitem" ng-click="showAbout()">
+        <i class="fa fa-about"></i>
+        {{'about'|translate}}
+      </a>
+    </li>
+    <li class="divider" role="separator"></li>
+    <li role="none">
+      <a href="" role="menuitem" ng-click="logout()" class="top-user-logout">
+        <i class="fa fa-power-off"></i>
+        {{'logout'|translate}}
+      </a>
+    </li>
+  </ul>
+</div>
