@@ -32,7 +32,12 @@ function getToken() {
 
 function request(method, urlPath, token, body, headers) {
   return new Promise((resolve, reject) => {
-    const data = body == null ? null : Buffer.isBuffer(body) ? body : Buffer.from(JSON.stringify(body));
+    const data =
+      body == null
+        ? null
+        : Buffer.isBuffer(body)
+          ? body
+          : Buffer.from(JSON.stringify(body));
     const req = https.request(
       {
         hostname: "api.github.com",
@@ -45,9 +50,10 @@ function request(method, urlPath, token, body, headers) {
           "X-GitHub-Api-Version": "2022-11-28",
           ...(data
             ? {
-                "Content-Type": headers && headers["Content-Type"]
-                  ? headers["Content-Type"]
-                  : "application/json",
+                "Content-Type":
+                  headers && headers["Content-Type"]
+                    ? headers["Content-Type"]
+                    : "application/json",
                 "Content-Length": data.length,
               }
             : {}),
@@ -70,12 +76,12 @@ function request(method, urlPath, token, body, headers) {
           } else {
             reject(
               new Error(
-                `${method} ${urlPath} -> ${res.statusCode}: ${text.slice(0, 500)}`
-              )
+                `${method} ${urlPath} -> ${res.statusCode}: ${text.slice(0, 500)}`,
+              ),
             );
           }
         });
-      }
+      },
     );
     req.on("error", reject);
     if (data) req.write(data);
@@ -88,7 +94,7 @@ function uploadAsset(uploadUrlTemplate, token, filePath) {
   const buf = fs.readFileSync(filePath);
   const url = new URL(
     uploadUrlTemplate.replace("{?name,label}", "") +
-      `?name=${encodeURIComponent(name)}`
+      `?name=${encodeURIComponent(name)}`,
   );
   return new Promise((resolve, reject) => {
     const req = https.request(
@@ -114,10 +120,14 @@ function uploadAsset(uploadUrlTemplate, token, filePath) {
             console.log("uploaded", name, buf.length, "bytes");
             resolve(JSON.parse(text));
           } else {
-            reject(new Error(`upload ${name} -> ${res.statusCode}: ${text.slice(0, 500)}`));
+            reject(
+              new Error(
+                `upload ${name} -> ${res.statusCode}: ${text.slice(0, 500)}`,
+              ),
+            );
           }
         });
-      }
+      },
     );
     req.on("error", reject);
     req.write(buf);
@@ -133,7 +143,7 @@ async function main() {
   const token = getToken();
   const notes = fs.readFileSync(
     path.join(ROOT, "release-notes", "2.0.0.zh-CN.md"),
-    "utf8"
+    "utf8",
   );
 
   let release;
@@ -141,7 +151,7 @@ async function main() {
     const existing = await request(
       "GET",
       `/repos/${OWNER}/${REPO}/releases/tags/${TAG}`,
-      token
+      token,
     );
     release = existing.json;
     console.log("release already exists:", release.html_url);
@@ -156,15 +166,13 @@ async function main() {
         body: notes,
         draft: false,
         prerelease: false,
-      }
+      },
     );
     release = created.json;
     console.log("created release:", release.html_url);
   }
 
-  const existingNames = new Set(
-    (release.assets || []).map((a) => a.name)
-  );
+  const existingNames = new Set((release.assets || []).map((a) => a.name));
 
   for (const file of ASSETS) {
     const base = path.basename(file);

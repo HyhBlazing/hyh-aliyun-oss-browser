@@ -16,6 +16,14 @@ ossutil*
 ossutil_output
 app.asar
 
-
-#tool
+# tool
 .vscode/
+
+# Tauri / monorepo
+apps/**/node_modules
+apps/**/dist
+apps/desktop/src-tauri/target
+apps/desktop/src-tauri/gen
+legacy/node_modules
+legacy/dist
+legacy/build

@@ -1,0 +1,46 @@
+name: Build 3.x Desktop
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v3.*"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ""
+          - platform: ubuntu-22.04
+            args: ""
+          - platform: macos-latest
+            args: "--target universal-apple-darwin"
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Linux deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install JS deps
+        run: |
+          npm --prefix apps/transfer-sidecar install
+          npm --prefix apps/desktop install
+      - name: Build Tauri
+        working-directory: apps/desktop
+        run: npm run tauri:build -- ${{ matrix.args }}
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: hyh-oss-browser-${{ matrix.platform }}
+          path: |
+            apps/desktop/src-tauri/target/release/bundle
+            apps/desktop/src-tauri/target/*/release/bundle

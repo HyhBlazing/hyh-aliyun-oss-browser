@@ -14,8 +14,9 @@ Licensed under the Apache License, Version 2.0
 Modifications
 -------------
 Copyright 2026 HyhBlazing
-UI/UX customizations, Chinese-only localization, removal of auto-upgrade,
-settings adjustments, and packaging scripts for this repository.
+
+- 2.x: Electron/AngularJS UI customizations (see legacy/)
+- 3.x: Tauri 2 + Vue 3 + Vite rewrite with Node transfer sidecar (see apps/)
 
 Disclaimer
 ----------
