@@ -7,6 +7,9 @@ module.exports = {
   //app id，打包名称前缀
   appId: "oss-browser",
 
+  // 应用版本号（优先于 package.json）
+  version: "2.0.0",
+
   //app名称
   appName: "OSS浏览器",
 

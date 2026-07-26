@@ -8,7 +8,7 @@
 
 | 项       | 说明                                                 |
 | -------- | ---------------------------------------------------- |
-| 版本     | `1.18.0`                                             |
+| 版本     | `2.0.0`（定制发布）                                  |
 | 桌面框架 | Electron `1.8.4`                                     |
 | 前端     | AngularJS `1.5` + Bootstrap 3                        |
 | 语言     | 仅简体中文（已移除英/日等多语言与语言切换）          |
@@ -38,7 +38,22 @@
 
 Windows 7 及以上、macOS、Linux。不建议在 Windows XP / Windows Server 上使用。
 
-## 客户端下载（官方发布包）
+## 客户端下载
+
+### 本仓库定制版 `2.0.0`
+
+发行页：[v2.0.0 Release](https://github.com/HyhBlazing/hyh-aliyun-oss-browser/releases/tag/v2.0.0)
+
+| 平台 | 下载 |
+| --- | --- |
+| Windows x64 | [oss-browser-win32-x64.zip](https://github.com/HyhBlazing/hyh-aliyun-oss-browser/releases/download/v2.0.0/oss-browser-win32-x64.zip) |
+| Windows x32 | [oss-browser-win32-ia32.zip](https://github.com/HyhBlazing/hyh-aliyun-oss-browser/releases/download/v2.0.0/oss-browser-win32-ia32.zip) |
+| Linux x64 | [oss-browser-linux-x64.zip](https://github.com/HyhBlazing/hyh-aliyun-oss-browser/releases/download/v2.0.0/oss-browser-linux-x64.zip) |
+| macOS x64 | [oss-browser-darwin-x64.zip](https://github.com/HyhBlazing/hyh-aliyun-oss-browser/releases/download/v2.0.0/oss-browser-darwin-x64.zip) |
+
+> macOS 包在 Windows 主机交叉打包，部分符号链接可能异常。若 Mac 上无法启动，建议在 macOS 本机重新执行打包。
+
+### 官方原版 `1.18.0`
 
 最新官方包版本 `1.18.0`，解压即可使用：
 

@@ -1,5 +1,5 @@
 
-VERSION=1.18.0
+VERSION=2.0.0
 NAME=oss-browser
 CUSTOM=./custom
 
