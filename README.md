@@ -7,6 +7,8 @@
 基于阿里云开源项目 [aliyun/oss-browser](https://github.com/aliyun/oss-browser) 的 **非官方定制客户端**。  
 面向阿里云对象存储（OSS）日常管理：浏览、上传、下载、搜索、授权等，界面改为更简洁的素色风格，并固定为简体中文。
 
+![列表页](img/列表页.png)
+
 > **重要声明（请先阅读）**  
 > - 本项目 **不是** 阿里云 / Alibaba Cloud 官方产品，也与阿里云无隶属或背书关系。  
 > - 上游项目采用 **Apache License 2.0**，本仓库在合规前提下进行修改与再分发，详见 [LICENSE](LICENSE)、[NOTICE](NOTICE)。  
@@ -23,6 +25,32 @@
 - 提供可直接下载的 Windows / Linux / macOS 安装包
 
 关键词（便于搜索）：`阿里云 OSS` `oss-browser` `Electron` `对象存储客户端` `AccessKey` `Bucket 管理`
+
+## 界面预览
+
+### 设置
+
+![设置功能](img/设置功能.png)
+
+### 收藏管理
+
+![收藏管理](img/收藏管理.png)
+
+### 子用户
+
+![子用户](img/子用户.png)
+
+### 获取访问链接 / 二维码
+
+![获取二维码或者访问链接](img/获取二维码或者访问链接.png)
+
+### 图片预览
+
+![图片预览](img/图片预览.png)
+
+### 视频预览
+
+![视频预览](img/视频预览.png)
 
 ## 快速开始
 
@@ -116,6 +144,7 @@ node scripts/create-github-release.js
 - 官方文档：[OSS Browser 帮助](https://help.aliyun.com/document_detail/61872.html)
 - 本仓库发行：[Releases](https://github.com/HyhBlazing/hyh-aliyun-oss-browser/releases)
 - 调试说明：[debug.md](debug.md)
+- 更新说明：[release-notes/2.0.0.zh-CN.md](release-notes/2.0.0.zh-CN.md)
 
 ## License
 
