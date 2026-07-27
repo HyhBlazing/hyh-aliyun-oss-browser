@@ -24,7 +24,9 @@ router.beforeEach(async (to) => {
     await auth.bootstrap();
   }
   if (to.meta.auth && !auth.session) {
-    return { name: "login" };
+    // 仅在开启「保持登录」时尝试静默恢复
+    const ok = await auth.restoreSidecarSession();
+    if (!ok) return { name: "login" };
   }
   if (to.name === "login" && auth.session) {
     return { name: "browser" };

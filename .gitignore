@@ -27,3 +27,7 @@ apps/desktop/src-tauri/gen
 legacy/node_modules
 legacy/dist
 legacy/build
+
+# generated icon source copy
+apps/desktop/src-tauri/icons/logo-source.png
+

@@ -2,20 +2,31 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default capabilities",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
+    "core:path:default",
     "shell:allow-open",
     "shell:allow-spawn",
     "shell:allow-execute",
     "dialog:default",
     "fs:default",
     "store:default",
+    "drag:default",
     {
       "identifier": "shell:allow-spawn",
       "allow": [
-        { "name": "binaries/transfer-sidecar", "sidecar": true },
-        { "name": "node", "cmd": "node", "args": true }
+        {
+          "name": "binaries/transfer-sidecar",
+          "sidecar": true
+        },
+        {
+          "name": "node",
+          "cmd": "node",
+          "args": true
+        }
       ]
     }
   ]

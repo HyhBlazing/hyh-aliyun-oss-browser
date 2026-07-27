@@ -1,5 +1,5 @@
 /**
- * Create GitHub release v2.0.0 and upload assets.
+ * Create GitHub release v3.0.0 and upload Tauri Windows bundle assets.
  * Uses git credential manager token; never prints secrets.
  */
 const { spawnSync } = require("child_process");
@@ -9,15 +9,38 @@ const https = require("https");
 
 const OWNER = "HyhBlazing";
 const REPO = "hyh-aliyun-oss-browser";
-const TAG = "v2.0.0";
-const NAME = "v2.0.0";
+const TAG = "v3.0.0";
+const NAME = "v3.0.0";
 const ROOT = path.join(__dirname, "..");
-const ASSETS = [
-  "oss-browser-win32-x64.zip",
-  "oss-browser-win32-ia32.zip",
-  "oss-browser-linux-x64.zip",
-  "oss-browser-darwin-x64.zip",
-].map((f) => path.join(ROOT, "releases", "2.0.0", f));
+const BUNDLE_DIR = path.join(
+  ROOT,
+  "apps",
+  "desktop",
+  "src-tauri",
+  "target",
+  "release",
+  "bundle",
+);
+
+function collectAssets() {
+  const files = [];
+  const walk = (dir) => {
+    if (!fs.existsSync(dir)) return;
+    for (const name of fs.readdirSync(dir)) {
+      const full = path.join(dir, name);
+      const st = fs.statSync(full);
+      if (st.isDirectory()) walk(full);
+      else if (/\.(msi|exe|nsis\.zip)$/i.test(name) || name.endsWith(".zip")) {
+        files.push(full);
+      }
+    }
+  };
+  walk(path.join(BUNDLE_DIR, "nsis"));
+  walk(path.join(BUNDLE_DIR, "msi"));
+  // Prefer installer artifacts only
+  const preferred = files.filter((f) => /\.(msi|exe)$/i.test(f));
+  return preferred.length ? preferred : files;
+}
 
 function getToken() {
   const r = spawnSync("git", ["credential", "fill"], {
@@ -89,6 +112,14 @@ function request(method, urlPath, token, body, headers) {
   });
 }
 
+function contentTypeFor(filePath) {
+  const lower = filePath.toLowerCase();
+  if (lower.endsWith(".msi")) return "application/x-msi";
+  if (lower.endsWith(".exe")) return "application/vnd.microsoft.portable-executable";
+  if (lower.endsWith(".zip")) return "application/zip";
+  return "application/octet-stream";
+}
+
 function uploadAsset(uploadUrlTemplate, token, filePath) {
   const name = path.basename(filePath);
   const buf = fs.readFileSync(filePath);
@@ -106,7 +137,7 @@ function uploadAsset(uploadUrlTemplate, token, filePath) {
           Accept: "application/vnd.github+json",
           Authorization: `Bearer ${token}`,
           "User-Agent": "oss-browser-release-script",
-          "Content-Type": "application/zip",
+          "Content-Type": contentTypeFor(filePath),
           "Content-Length": buf.length,
           "X-GitHub-Api-Version": "2022-11-28",
         },
@@ -136,13 +167,19 @@ function uploadAsset(uploadUrlTemplate, token, filePath) {
 }
 
 async function main() {
-  for (const f of ASSETS) {
-    if (!fs.existsSync(f)) throw new Error("missing asset: " + f);
+  const assets = collectAssets();
+  if (!assets.length) {
+    throw new Error(
+      "missing Tauri bundle assets under " +
+        BUNDLE_DIR +
+        " (run npm run desktop:build first)",
+    );
   }
+  console.log("assets:", assets.map((f) => path.basename(f)).join(", "));
 
   const token = getToken();
   const notes = fs.readFileSync(
-    path.join(ROOT, "release-notes", "2.0.0.zh-CN.md"),
+    path.join(ROOT, "release-notes", "3.0.0.zh-CN.md"),
     "utf8",
   );
 
@@ -174,7 +211,7 @@ async function main() {
 
   const existingNames = new Set((release.assets || []).map((a) => a.name));
 
-  for (const file of ASSETS) {
+  for (const file of assets) {
     const base = path.basename(file);
     if (existingNames.has(base)) {
       console.log("skip existing asset", base);
@@ -183,7 +220,7 @@ async function main() {
     await uploadAsset(release.upload_url, token, file);
   }
 
-  console.log("done");
+  console.log("done:", release.html_url || `https://github.com/${OWNER}/${REPO}/releases/tag/${TAG}`);
 }
 
 main().catch((err) => {

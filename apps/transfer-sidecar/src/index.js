@@ -1,6 +1,32 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
-import { createOssClient, testLogin } from "./oss.js";
+import {
+  abortMultipartUploads,
+  buildAddressDomains,
+  buildObjectAddress,
+  buildBatchObjectAddresses,
+  clearBucketRegionCache,
+  createFolder,
+  createOssClient,
+  deleteKeysIncludingFolders,
+  getObjectMeta,
+  listAllBuckets,
+  listIncompleteUploads,
+  listObjectsAggregated,
+  listBucketCnameRecords,
+  moveOrCopyObjects,
+  normalizeRegion,
+  putObjectMeta,
+  rememberBucketRegion,
+  resolveAddressScheme,
+  restoreObject,
+  restoreObjects,
+  testLogin,
+  validateAcl,
+  withBucketClient,
+  applyProxyOptions,
+} from "./oss.js";
+import { chineseErr } from "./errors.js";
 import { TransferManager } from "./transfer.js";
 import { loadSettings, saveSettings } from "./settings.js";
 import fs from "fs";
@@ -9,7 +35,19 @@ import path from "path";
 
 const TOKEN = process.env.SIDECAR_TOKEN || "dev-token";
 const HOST = "127.0.0.1";
-const PORT = Number(process.env.SIDECAR_PORT || 0);
+const PORT = Number(process.env.SIDECAR_PORT || 17823);
+
+function isAliyunHostQuick(domain) {
+  const host = String(domain || "")
+    .replace(/^https?:\/\//i, "")
+    .split("/")[0]
+    .toLowerCase();
+  return (
+    host.endsWith(".aliyuncs.com") ||
+    host.endsWith(".aliyun-inc.com") ||
+    host.includes("oss-accelerate")
+  );
+}
 
 const state = {
   auth: null,
@@ -35,6 +73,16 @@ function requireAuth(req, reply, done) {
   done();
 }
 
+function requireWrite(req, reply, done) {
+  if (state.auth?.privilege === "readOnly") {
+    reply
+      .code(403)
+      .send({ code: 403, message: "当前为只读权限，无法执行该操作" });
+    return;
+  }
+  done();
+}
+
 const app = Fastify({ logger: false });
 await app.register(cors, { origin: true });
 
@@ -52,16 +100,21 @@ app.post("/auth/login", async (req, reply) => {
     const result = await testLogin(body);
     state.auth = result.auth;
     state.client = result.client;
-    return { code: 0, message: "登录成功", data: { auth: sanitizeAuth(result.auth) } };
+    return {
+      code: 0,
+      message: "登录成功",
+      data: { auth: sanitizeAuth(result.auth) },
+    };
   } catch (err) {
     reply.code(400);
-    return { code: 400, message: err.message || "登录失败" };
+    return { code: 400, message: chineseErr(err) };
   }
 });
 
 app.post("/auth/logout", async () => {
   state.auth = null;
   state.client = null;
+  clearBucketRegionCache();
   return { code: 0, message: "已退出" };
 });
 
@@ -75,20 +128,41 @@ app.get("/settings", async () => ({
   data: loadSettings(),
 }));
 
-app.put("/settings", async (req) => {
-  const next = saveSettings(req.body || {});
-  return { code: 0, message: "已保存", data: next };
+app.put("/settings", async (req, reply) => {
+  try {
+    const body = req.body || {};
+    const merged = {
+      ...loadSettings(),
+      ...body,
+    };
+    if (merged.proxyEnabled && !String(merged.proxyUrl || "").trim()) {
+      reply.code(400);
+      return { code: 400, message: "启用代理时请填写代理地址" };
+    }
+    applyProxyOptions({}, merged);
+    const next = saveSettings(body);
+    // 代理等配置变更后重建客户端；失败不回滚已保存的设置
+    if (state.auth) {
+      try {
+        state.client = createOssClient(state.auth);
+      } catch (err) {
+        return {
+          code: 0,
+          message: "设置已保存，但应用代理失败：" + chineseErr(err),
+          data: next,
+        };
+      }
+    }
+    return { code: 0, message: "已保存", data: next };
+  } catch (err) {
+    reply.code(400);
+    return { code: 400, message: chineseErr(err) };
+  }
 });
 
 app.get("/buckets", { preHandler: requireAuth }, async (req, reply) => {
   try {
-    const res = await state.client.listBuckets();
-    const list = (res.buckets || []).map((b) => ({
-      name: b.name,
-      region: b.region,
-      creationDate: b.creationDate,
-      storageClass: b.storageClass,
-    }));
+    const list = await listAllBuckets(state.client);
     return { code: 0, data: { list } };
   } catch (err) {
     reply.code(500);
@@ -96,116 +170,690 @@ app.get("/buckets", { preHandler: requireAuth }, async (req, reply) => {
   }
 });
 
-app.post("/buckets", { preHandler: requireAuth }, async (req, reply) => {
-  const { name, region, acl } = req.body || {};
-  if (!name) {
-    reply.code(400);
-    return { code: 400, message: "Bucket 名称不能为空" };
-  }
-  try {
-    const client = createOssClient({ ...state.auth, region: region || state.auth.region });
-    await client.putBucket(name, {
-      storageClass: "Standard",
-      acl: acl || "private",
-      dataRedundancyType: "LRS",
-    });
-    return { code: 0, message: "创建成功" };
-  } catch (err) {
-    reply.code(500);
-    return { code: 500, message: chineseErr(err) };
-  }
-});
+app.post(
+  "/buckets",
+  { preHandler: [requireAuth, requireWrite] },
+  async (req, reply) => {
+    const { name, region, acl, storageClass } = req.body || {};
+    if (!name) {
+      reply.code(400);
+      return { code: 400, message: "Bucket 名称不能为空" };
+    }
+    try {
+      const r = normalizeRegion(region) || state.auth.region;
+      const client = createOssClient({ ...state.auth, region: r });
+      const opts = {};
+      if (storageClass) opts.storageClass = storageClass;
+      await client.putBucket(name, opts);
+      if (acl) {
+        try {
+          await client.putBucketACL(name, acl);
+        } catch {
+          /* 部分账号无 ACL 权限时忽略 */
+        }
+      }
+      rememberBucketRegion(name, r);
+      return { code: 0, message: "创建成功" };
+    } catch (err) {
+      reply.code(500);
+      return { code: 500, message: chineseErr(err) };
+    }
+  },
+);
 
-app.delete("/buckets/:name", { preHandler: requireAuth }, async (req, reply) => {
-  try {
-    await state.client.deleteBucket(req.params.name);
-    return { code: 0, message: "删除成功" };
-  } catch (err) {
-    reply.code(500);
-    return { code: 500, message: chineseErr(err) };
-  }
-});
+app.delete(
+  "/buckets/:name",
+  { preHandler: [requireAuth, requireWrite] },
+  async (req, reply) => {
+    const { region } = req.query || {};
+    try {
+      await withBucketClient(
+        state.auth,
+        req.params.name,
+        region,
+        state.client,
+        async (client) => {
+          await client.deleteBucket(req.params.name);
+        },
+      );
+      return { code: 0, message: "删除成功" };
+    } catch (err) {
+      reply.code(500);
+      return { code: 500, message: chineseErr(err) };
+    }
+  },
+);
 
 app.get("/objects", { preHandler: requireAuth }, async (req, reply) => {
-  const { bucket, prefix = "", marker = "", maxKeys } = req.query || {};
+  const { bucket, prefix = "", marker = "", maxKeys, region } = req.query || {};
   if (!bucket) {
     reply.code(400);
     return { code: 400, message: "缺少 bucket" };
   }
   try {
     const settings = loadSettings();
-    const client = createOssClient({ ...state.auth, bucket });
-    const res = await client.listV2({
-      prefix,
-      "continuation-token": marker || undefined,
-      "max-keys": Number(maxKeys) || settings.listObjectNum || 500,
-      delimiter: "/",
-    });
-    const folders = (res.prefixes || []).map((p) => ({
-      name: p,
-      isFolder: true,
-      path: p,
-    }));
-    const files = (res.objects || [])
-      .filter((o) => o.name !== prefix)
-      .map((o) => ({
-        name: o.name,
-        isFolder: false,
-        size: o.size,
-        lastModified: o.lastModified,
-        storageClass: o.storageClass,
-        etag: o.etag,
-      }));
-    return {
-      code: 0,
-      data: {
-        list: [...folders, ...files],
-        nextMarker: res.nextContinuationToken || "",
-        isTruncated: !!res.isTruncated,
-        prefix,
-      },
-    };
+    const data = await withBucketClient(
+      state.auth,
+      bucket,
+      region,
+      state.client,
+      async (client) =>
+        listObjectsAggregated(client, {
+          prefix,
+          marker,
+          maxKeys: Number(maxKeys) || settings.listObjectNum || 500,
+        }),
+    );
+    return { code: 0, data };
   } catch (err) {
     reply.code(500);
     return { code: 500, message: chineseErr(err) };
   }
 });
 
-app.post("/objects/delete", { preHandler: requireAuth }, async (req, reply) => {
-  const { bucket, keys = [] } = req.body || {};
-  if (!bucket || !keys.length) {
+app.post(
+  "/objects/delete",
+  { preHandler: [requireAuth, requireWrite] },
+  async (req, reply) => {
+    const { bucket, keys = [], region } = req.body || {};
+    if (!bucket || !keys.length) {
+      reply.code(400);
+      return { code: 400, message: "参数不完整" };
+    }
+    try {
+      await withBucketClient(
+        state.auth,
+        bucket,
+        region,
+        state.client,
+        async (client) => {
+          await deleteKeysIncludingFolders(client, keys);
+        },
+      );
+      return { code: 0, message: "删除成功" };
+    } catch (err) {
+      reply.code(500);
+      return { code: 500, message: chineseErr(err) };
+    }
+  },
+);
+
+app.post(
+  "/objects/copy",
+  { preHandler: [requireAuth, requireWrite] },
+  async (req, reply) => {
+    const { bucket, fromKey, toKey, toBucket, region } = req.body || {};
+    try {
+      await withBucketClient(
+        state.auth,
+        toBucket || bucket,
+        region,
+        state.client,
+        async (client) => {
+          // ali-oss: copy(name, sourceName[, sourceBucket])
+          await client.copy(toKey, fromKey, bucket);
+        },
+      );
+      return { code: 0, message: "复制成功" };
+    } catch (err) {
+      reply.code(500);
+      return { code: 500, message: chineseErr(err) };
+    }
+  },
+);
+
+app.post(
+  "/objects/rename",
+  { preHandler: [requireAuth, requireWrite] },
+  async (req, reply) => {
+    const { bucket, fromKey, toKey, region } = req.body || {};
+    if (!bucket || !fromKey || !toKey) {
+      reply.code(400);
+      return { code: 400, message: "参数不完整" };
+    }
+    try {
+      await withBucketClient(
+        state.auth,
+        bucket,
+        region,
+        state.client,
+        async (client) => {
+          const from = String(fromKey);
+          if (from.endsWith("/")) {
+            const toPrefix = String(toKey).endsWith("/") ? toKey : `${toKey}/`;
+            await moveOrCopyObjects({
+              auth: state.auth,
+              serviceClient: state.client,
+              bucket,
+              keys: [from],
+              toBucket: bucket,
+              toPrefix,
+              fromPrefix: from,
+              region,
+              isCopy: false,
+            });
+            await deleteKeysIncludingFolders(client, [from]);
+          } else {
+            await client.copy(toKey, fromKey, bucket);
+            await client.delete(fromKey);
+          }
+        },
+      );
+      return { code: 0, message: "重命名成功" };
+    } catch (err) {
+      reply.code(500);
+      return { code: 500, message: chineseErr(err) };
+    }
+  },
+);
+
+app.post(
+  "/objects/folder",
+  { preHandler: [requireAuth, requireWrite] },
+  async (req, reply) => {
+    const { bucket, prefix, region } = req.body || {};
+    if (!bucket || !prefix) {
+      reply.code(400);
+      return { code: 400, message: "参数不完整" };
+    }
+    try {
+      const data = await withBucketClient(
+        state.auth,
+        bucket,
+        region,
+        state.client,
+        async (client) => createFolder(client, prefix),
+      );
+      return { code: 0, message: "创建成功", data };
+    } catch (err) {
+      reply.code(500);
+      return { code: 500, message: chineseErr(err) };
+    }
+  },
+);
+
+app.get("/objects/acl", { preHandler: requireAuth }, async (req, reply) => {
+  const { bucket, key, region } = req.query || {};
+  if (!bucket || !key) {
     reply.code(400);
     return { code: 400, message: "参数不完整" };
   }
   try {
-    const client = createOssClient({ ...state.auth, bucket });
-    await client.deleteMulti(keys, { quiet: true });
-    return { code: 0, message: "删除成功" };
+    const data = await withBucketClient(
+      state.auth,
+      bucket,
+      region,
+      state.client,
+      async (client) => {
+        const res = await client.getACL(String(key));
+        return { acl: res?.acl || "default" };
+      },
+    );
+    return { code: 0, data };
   } catch (err) {
     reply.code(500);
     return { code: 500, message: chineseErr(err) };
   }
 });
 
-app.post("/objects/copy", { preHandler: requireAuth }, async (req, reply) => {
-  const { bucket, fromKey, toKey, toBucket } = req.body || {};
+app.put(
+  "/objects/acl",
+  { preHandler: [requireAuth, requireWrite] },
+  async (req, reply) => {
+    const { bucket, key, acl, region } = req.body || {};
+    if (!bucket || !key || !acl) {
+      reply.code(400);
+      return { code: 400, message: "参数不完整" };
+    }
+    try {
+      const nextAcl = validateAcl(acl);
+      await withBucketClient(
+        state.auth,
+        bucket,
+        region,
+        state.client,
+        async (client) => {
+          await client.putACL(String(key), nextAcl);
+        },
+      );
+      return { code: 0, message: "ACL 已更新" };
+    } catch (err) {
+      reply.code(500);
+      return { code: 500, message: chineseErr(err) };
+    }
+  },
+);
+
+app.get("/objects/meta", { preHandler: requireAuth }, async (req, reply) => {
+  const { bucket, key, region } = req.query || {};
+  if (!bucket || !key) {
+    reply.code(400);
+    return { code: 400, message: "参数不完整" };
+  }
   try {
-    const client = createOssClient({ ...state.auth, bucket: toBucket || bucket });
-    await client.copy(toKey, `/${bucket}/${fromKey}`);
-    return { code: 0, message: "复制成功" };
+    const data = await withBucketClient(
+      state.auth,
+      bucket,
+      region,
+      state.client,
+      async (client) => getObjectMeta(client, key),
+    );
+    return { code: 0, data };
   } catch (err) {
     reply.code(500);
     return { code: 500, message: chineseErr(err) };
   }
 });
 
-app.post("/objects/rename", { preHandler: requireAuth }, async (req, reply) => {
-  const { bucket, fromKey, toKey } = req.body || {};
+app.put(
+  "/objects/meta",
+  { preHandler: [requireAuth, requireWrite] },
+  async (req, reply) => {
+    const { bucket, key, region, headers = {}, meta = {} } = req.body || {};
+    if (!bucket || !key) {
+      reply.code(400);
+      return { code: 400, message: "参数不完整" };
+    }
+    try {
+      await withBucketClient(
+        state.auth,
+        bucket,
+        region,
+        state.client,
+        async (client) => {
+          await putObjectMeta(client, bucket, key, headers, meta);
+        },
+      );
+      return { code: 0, message: "元数据已更新" };
+    } catch (err) {
+      reply.code(500);
+      return { code: 500, message: chineseErr(err) };
+    }
+  },
+);
+
+app.post(
+  "/objects/restore",
+  { preHandler: [requireAuth, requireWrite] },
+  async (req, reply) => {
+    const { bucket, key, keys = [], days = 1, region } = req.body || {};
+    const list = keys?.length ? keys : key ? [key] : [];
+    if (!bucket || !list.length) {
+      reply.code(400);
+      return { code: 400, message: "参数不完整" };
+    }
+    try {
+      const data = await withBucketClient(
+        state.auth,
+        bucket,
+        region,
+        state.client,
+        async (client) => {
+          if (list.length === 1) {
+            await restoreObject(client, list[0], days);
+            return { total: 1, done: 1, failed: 0 };
+          }
+          return restoreObjects(client, list, days);
+        },
+      );
+      return { code: 0, message: "解冻任务已提交", data };
+    } catch (err) {
+      reply.code(500);
+      return { code: 500, message: chineseErr(err) };
+    }
+  },
+);
+
+app.post(
+  "/objects/symlink",
+  { preHandler: [requireAuth, requireWrite] },
+  async (req, reply) => {
+    const { bucket, target, linkName, region } = req.body || {};
+    if (!bucket || !target || !linkName) {
+      reply.code(400);
+      return { code: 400, message: "参数不完整" };
+    }
+    try {
+      await withBucketClient(
+        state.auth,
+        bucket,
+        region,
+        state.client,
+        async (client) => {
+          await client.putSymlink(String(linkName), String(target));
+        },
+      );
+      return { code: 0, message: "软链接已创建" };
+    } catch (err) {
+      reply.code(500);
+      return { code: 500, message: chineseErr(err) };
+    }
+  },
+);
+
+app.get("/objects/symlink", { preHandler: requireAuth }, async (req, reply) => {
+  const { bucket, key, region } = req.query || {};
+  if (!bucket || !key) {
+    reply.code(400);
+    return { code: 400, message: "参数不完整" };
+  }
   try {
-    const client = createOssClient({ ...state.auth, bucket });
-    await client.copy(toKey, `/${bucket}/${fromKey}`);
-    await client.delete(fromKey);
-    return { code: 0, message: "重命名成功" };
+    const data = await withBucketClient(
+      state.auth,
+      bucket,
+      region,
+      state.client,
+      async (client) => {
+        const res = await client.getSymlink(String(key));
+        return { target: res?.targetName || res?.target || "" };
+      },
+    );
+    return { code: 0, data };
+  } catch (err) {
+    reply.code(500);
+    return { code: 500, message: chineseErr(err) };
+  }
+});
+
+app.get(
+  "/buckets/:name/acl",
+  { preHandler: requireAuth },
+  async (req, reply) => {
+    const { region } = req.query || {};
+    try {
+      const data = await withBucketClient(
+        state.auth,
+        req.params.name,
+        region,
+        state.client,
+        async (client) => {
+          const res = await client.getBucketACL(req.params.name);
+          return { acl: res?.acl || "default" };
+        },
+      );
+      return { code: 0, data };
+    } catch (err) {
+      reply.code(500);
+      return { code: 500, message: chineseErr(err) };
+    }
+  },
+);
+
+app.put(
+  "/buckets/:name/acl",
+  { preHandler: [requireAuth, requireWrite] },
+  async (req, reply) => {
+    const { acl, region } = req.body || {};
+    if (!acl) {
+      reply.code(400);
+      return { code: 400, message: "缺少 acl" };
+    }
+    try {
+      const nextAcl = validateAcl(acl);
+      await withBucketClient(
+        state.auth,
+        req.params.name,
+        region,
+        state.client,
+        async (client) => {
+          await client.putBucketACL(req.params.name, nextAcl);
+        },
+      );
+      return { code: 0, message: "Bucket ACL 已更新" };
+    } catch (err) {
+      reply.code(500);
+      return { code: 500, message: chineseErr(err) };
+    }
+  },
+);
+
+app.get(
+  "/buckets/:name/multipart",
+  { preHandler: requireAuth },
+  async (req, reply) => {
+    const { region, prefix = "", marker = "" } = req.query || {};
+    try {
+      const data = await withBucketClient(
+        state.auth,
+        req.params.name,
+        region,
+        state.client,
+        async (client) => listIncompleteUploads(client, { prefix, marker }),
+      );
+      return { code: 0, data };
+    } catch (err) {
+      reply.code(500);
+      return { code: 500, message: chineseErr(err) };
+    }
+  },
+);
+
+app.post(
+  "/buckets/:name/multipart/abort",
+  { preHandler: [requireAuth, requireWrite] },
+  async (req, reply) => {
+    const { uploads = [], region } = req.body || {};
+    if (!uploads.length) {
+      reply.code(400);
+      return { code: 400, message: "参数不完整" };
+    }
+    try {
+      const data = await withBucketClient(
+        state.auth,
+        req.params.name,
+        region,
+        state.client,
+        async (client) => abortMultipartUploads(client, uploads),
+      );
+      return { code: 0, message: "已取消分片上传", data };
+    } catch (err) {
+      reply.code(500);
+      return { code: 500, message: chineseErr(err) };
+    }
+  },
+);
+
+app.post("/objects/sign", { preHandler: requireAuth }, async (req, reply) => {
+  const { bucket, key, expires = 3600, region, domain } = req.body || {};
+  if (!bucket || !key) {
+    reply.code(400);
+    return { code: 400, message: "参数不完整" };
+  }
+  try {
+    const data = await withBucketClient(
+      state.auth,
+      bucket,
+      region,
+      state.client,
+      async (client) => {
+        let url = client.signatureUrl(key, {
+          expires: Number(expires) || 3600,
+        });
+        let scheme = "https";
+        if (domain) {
+          const cnameRecords = isAliyunHostQuick(domain)
+            ? []
+            : await listBucketCnameRecords(client, bucket);
+          scheme = resolveAddressScheme(domain, cnameRecords);
+          const host = String(domain)
+            .replace(/^https?:\/\//i, "")
+            .replace(/\/$/, "");
+          url = String(url).replace(
+            /^https?:\/\/[^/]+\//i,
+            `${scheme}://${host}/`,
+          );
+        }
+        return {
+          url,
+          expires: Number(expires) || 3600,
+          domain: domain || "",
+          scheme,
+        };
+      },
+    );
+    return { code: 0, data };
+  } catch (err) {
+    reply.code(500);
+    return { code: 500, message: chineseErr(err) };
+  }
+});
+
+/** 获取地址：公开读返回直链，私有返回签名链接 */
+app.post(
+  "/objects/address",
+  { preHandler: requireAuth },
+  async (req, reply) => {
+    const { bucket, key, expires = 3600, region, domain } = req.body || {};
+    if (!bucket || !key) {
+      reply.code(400);
+      return { code: 400, message: "参数不完整" };
+    }
+    try {
+      if (region) rememberBucketRegion(bucket, region);
+      const data = await buildObjectAddress({
+        auth: state.auth,
+        serviceClient: state.client,
+        bucket,
+        key,
+        expires,
+        region,
+        domain: domain || "",
+      });
+      return { code: 0, data };
+    } catch (err) {
+      reply.code(500);
+      return { code: 500, message: chineseErr(err) };
+    }
+  },
+);
+
+/** 批量获取地址：支持目录展开 */
+app.post(
+  "/objects/addresses",
+  { preHandler: requireAuth },
+  async (req, reply) => {
+    const {
+      bucket,
+      keys = [],
+      expires = 3600,
+      region,
+      domain,
+      maxFiles = 5000,
+    } = req.body || {};
+    if (!bucket || !keys.length) {
+      reply.code(400);
+      return { code: 400, message: "参数不完整" };
+    }
+    try {
+      if (region) rememberBucketRegion(bucket, region);
+      const data = await buildBatchObjectAddresses({
+        auth: state.auth,
+        serviceClient: state.client,
+        bucket,
+        keys,
+        expires,
+        region,
+        domain: domain || "",
+        maxFiles: Math.min(20000, Math.max(1, Number(maxFiles) || 5000)),
+      });
+      return { code: 0, data };
+    } catch (err) {
+      reply.code(500);
+      return { code: 500, message: chineseErr(err) };
+    }
+  },
+);
+
+app.get(
+  "/buckets/:name/domains",
+  { preHandler: requireAuth },
+  async (req, reply) => {
+    const { region } = req.query || {};
+    try {
+      const data = await buildAddressDomains(
+        state.auth,
+        req.params.name,
+        region,
+        state.client,
+      );
+      return { code: 0, data };
+    } catch (err) {
+      reply.code(500);
+      return { code: 500, message: chineseErr(err) };
+    }
+  },
+);
+
+app.get("/objects/content", { preHandler: requireAuth }, async (req, reply) => {
+  const { bucket, key, region } = req.query || {};
+  if (!bucket || !key) {
+    reply.code(400);
+    return { code: 400, message: "参数不完整" };
+  }
+  try {
+    const data = await withBucketClient(
+      state.auth,
+      String(bucket),
+      region,
+      state.client,
+      async (client) => {
+        const head = await client.head(String(key));
+        const size = Number(head.res?.headers?.["content-length"] || 0);
+        if (size > 2 * 1024 * 1024) {
+          throw new Error("文件过大，请下载后查看");
+        }
+        const result = await client.get(String(key));
+        const buf = Buffer.isBuffer(result.content)
+          ? result.content
+          : Buffer.from(result.content || "");
+        const contentType =
+          head.res?.headers?.["content-type"] || "application/octet-stream";
+        return {
+          content: buf.toString("utf8"),
+          contentType,
+          size,
+        };
+      },
+    );
+    return { code: 0, data };
+  } catch (err) {
+    reply.code(500);
+    return { code: 500, message: chineseErr(err) };
+  }
+});
+
+/** 媒体预览：直出二进制，避免浏览器跨域导致音频无法分析频谱 */
+app.get("/objects/media", { preHandler: requireAuth }, async (req, reply) => {
+  const { bucket, key, region } = req.query || {};
+  if (!bucket || !key) {
+    reply.code(400);
+    return { code: 400, message: "参数不完整" };
+  }
+  try {
+    const result = await withBucketClient(
+      state.auth,
+      String(bucket),
+      region,
+      state.client,
+      async (client) => {
+        const head = await client.head(String(key));
+        const size = Number(head.res?.headers?.["content-length"] || 0);
+        if (size > 80 * 1024 * 1024) {
+          throw new Error("音频文件过大，请下载后播放");
+        }
+        const obj = await client.get(String(key));
+        const buf = Buffer.isBuffer(obj.content)
+          ? obj.content
+          : Buffer.from(obj.content || "");
+        const contentType =
+          head.res?.headers?.["content-type"] || "application/octet-stream";
+        return { buf, contentType, size };
+      },
+    );
+    reply.header("Content-Type", result.contentType);
+    reply.header("Content-Length", String(result.buf.length));
+    reply.header("Cache-Control", "no-store");
+    return reply.send(result.buf);
   } catch (err) {
     reply.code(500);
     return { code: 500, message: chineseErr(err) };
@@ -217,49 +865,219 @@ app.get("/transfer/jobs", { preHandler: requireAuth }, async () => ({
   data: { list: transfer.list() },
 }));
 
-app.post("/transfer/upload", { preHandler: requireAuth }, async (req, reply) => {
-  const { bucket, prefix = "", localPaths = [] } = req.body || {};
-  if (!bucket || !localPaths.length) {
-    reply.code(400);
-    return { code: 400, message: "参数不完整" };
-  }
-  try {
-    const jobs = await transfer.enqueueUpload({ bucket, prefix, localPaths });
-    return { code: 0, data: { jobs } };
-  } catch (err) {
-    reply.code(500);
-    return { code: 500, message: chineseErr(err) };
-  }
+app.post(
+  "/transfer/upload",
+  { preHandler: [requireAuth, requireWrite] },
+  async (req, reply) => {
+    const { bucket, prefix = "", localPaths = [], region } = req.body || {};
+    if (!bucket || !localPaths.length) {
+      reply.code(400);
+      return { code: 400, message: "参数不完整" };
+    }
+    try {
+      if (region) rememberBucketRegion(bucket, region);
+      const { overwriteSameName } = req.body || {};
+      const data = await transfer.enqueueUpload({
+        bucket,
+        prefix,
+        localPaths,
+        region,
+        ...(typeof overwriteSameName === "boolean"
+          ? { overwriteSameName }
+          : {}),
+      });
+      return { code: 0, data };
+    } catch (err) {
+      reply.code(500);
+      return { code: 500, message: chineseErr(err) };
+    }
+  },
+);
+
+app.post(
+  "/transfer/download",
+  { preHandler: requireAuth },
+  async (req, reply) => {
+    const {
+      bucket,
+      keys = [],
+      localDir,
+      region,
+      stripPrefix = "",
+    } = req.body || {};
+    if (!bucket || !keys.length || !localDir) {
+      reply.code(400);
+      return { code: 400, message: "参数不完整" };
+    }
+    try {
+      if (region) rememberBucketRegion(bucket, region);
+      const jobs = await transfer.enqueueDownload({
+        bucket,
+        keys,
+        localDir,
+        region,
+        stripPrefix,
+      });
+      return { code: 0, data: { jobs } };
+    } catch (err) {
+      reply.code(500);
+      return { code: 500, message: chineseErr(err) };
+    }
+  },
+);
+
+/** 同步下载（拖拽出窗口用），返回本地路径 */
+app.post(
+  "/transfer/download-now",
+  { preHandler: requireAuth },
+  async (req, reply) => {
+    const {
+      bucket,
+      keys = [],
+      localDir,
+      region,
+      stripPrefix = "",
+    } = req.body || {};
+    if (!bucket || !keys.length || !localDir) {
+      reply.code(400);
+      return { code: 400, message: "参数不完整" };
+    }
+    try {
+      if (region) rememberBucketRegion(bucket, region);
+      const data = await transfer.downloadNow({
+        bucket,
+        keys,
+        localDir,
+        region,
+        stripPrefix,
+      });
+      return { code: 0, data };
+    } catch (err) {
+      reply.code(500);
+      return { code: 500, message: chineseErr(err) };
+    }
+  },
+);
+
+app.post(
+  "/transfer/move",
+  { preHandler: [requireAuth, requireWrite] },
+  async (req, reply) => {
+    const {
+      bucket,
+      keys = [],
+      toBucket,
+      toPrefix = "",
+      fromPrefix = "",
+      region,
+      toRegion,
+      isCopy = false,
+    } = req.body || {};
+    if (!bucket || !keys.length || !(toBucket || bucket)) {
+      reply.code(400);
+      return { code: 400, message: "参数不完整" };
+    }
+    try {
+      if (region) rememberBucketRegion(bucket, region);
+      if (toBucket && toRegion) rememberBucketRegion(toBucket, toRegion);
+      const data = await transfer.enqueueMoveCopy({
+        bucket,
+        keys,
+        toBucket: toBucket || bucket,
+        toPrefix,
+        fromPrefix,
+        region,
+        toRegion: toRegion || region,
+        isCopy: !!isCopy,
+      });
+      return {
+        code: 0,
+        message: isCopy ? "已加入复制队列" : "已加入移动队列",
+        data,
+      };
+    } catch (err) {
+      reply.code(500);
+      return { code: 500, message: chineseErr(err) };
+    }
+  },
+);
+
+app.post(
+  "/objects/move",
+  { preHandler: [requireAuth, requireWrite] },
+  async (req, reply) => {
+    const {
+      bucket,
+      keys = [],
+      toBucket,
+      toPrefix = "",
+      fromPrefix = "",
+      region,
+      toRegion,
+      isCopy = false,
+    } = req.body || {};
+    if (!bucket || !keys.length || !(toBucket || bucket)) {
+      reply.code(400);
+      return { code: 400, message: "参数不完整" };
+    }
+    try {
+      const result = await moveOrCopyObjects({
+        auth: state.auth,
+        serviceClient: state.client,
+        bucket,
+        keys,
+        toBucket: toBucket || bucket,
+        toPrefix,
+        fromPrefix,
+        region,
+        toRegion: toRegion || region,
+        isCopy: !!isCopy,
+      });
+      return {
+        code: 0,
+        message: isCopy ? "复制完成" : "移动完成",
+        data: result,
+      };
+    } catch (err) {
+      reply.code(500);
+      return { code: 500, message: chineseErr(err) };
+    }
+  },
+);
+
+app.post("/transfer/jobs/clear", { preHandler: requireAuth }, async (req) => {
+  const { type = "all", onlyFinished = false } = req.body || {};
+  const ids = transfer.clear({ type, onlyFinished: !!onlyFinished });
+  return { code: 0, message: "已清空", data: { ids, count: ids.length } };
 });
 
-app.post("/transfer/download", { preHandler: requireAuth }, async (req, reply) => {
-  const { bucket, keys = [], localDir } = req.body || {};
-  if (!bucket || !keys.length || !localDir) {
-    reply.code(400);
-    return { code: 400, message: "参数不完整" };
-  }
-  try {
-    const jobs = await transfer.enqueueDownload({ bucket, keys, localDir });
-    return { code: 0, data: { jobs } };
-  } catch (err) {
-    reply.code(500);
-    return { code: 500, message: chineseErr(err) };
-  }
-});
-
-app.post("/transfer/jobs/:id/pause", { preHandler: requireAuth }, async (req) => {
-  transfer.pause(req.params.id);
+app.post("/transfer/jobs/pause", { preHandler: requireAuth }, async (req) => {
+  const { id } = req.body || {};
+  if (!id) return { code: 400, message: "缺少任务 id" };
+  transfer.pause(String(id));
   return { code: 0, message: "已暂停" };
 });
 
-app.post("/transfer/jobs/:id/resume", { preHandler: requireAuth }, async (req) => {
-  transfer.resume(req.params.id);
+app.post("/transfer/jobs/resume", { preHandler: requireAuth }, async (req) => {
+  const { id } = req.body || {};
+  if (!id) return { code: 400, message: "缺少任务 id" };
+  transfer.resume(String(id));
   return { code: 0, message: "已继续" };
 });
 
-app.post("/transfer/jobs/:id/remove", { preHandler: requireAuth }, async (req) => {
-  transfer.remove(req.params.id);
-  return { code: 0, message: "已移除" };
+app.post("/transfer/jobs/remove", { preHandler: requireAuth }, async (req) => {
+  const { id, ids } = req.body || {};
+  const list = Array.isArray(ids) ? ids : id ? [id] : [];
+  if (!list.length) return { code: 400, message: "缺少任务 id" };
+  const removed = [];
+  for (const item of list) {
+    if (transfer.remove(String(item))) removed.push(String(item));
+  }
+  return {
+    code: 0,
+    message: "已移除",
+    data: { ids: removed, count: removed.length },
+  };
 });
 
 app.get("/transfer/events", { preHandler: requireAuth }, async (req, reply) => {
@@ -274,11 +1092,17 @@ app.get("/transfer/events", { preHandler: requireAuth }, async (req, reply) => {
   };
   send({ type: "snapshot", list: transfer.list() });
   const onProgress = (job) => send({ type: "progress", job });
+  const onRemoved = (payload) => send({ type: "removed", ...payload });
+  const onSnapshot = (payload) =>
+    send({ type: "snapshot", list: payload.list || [] });
   transfer.on("progress", onProgress);
+  transfer.on("removed", onRemoved);
+  transfer.on("snapshot", onSnapshot);
   req.raw.on("close", () => {
     transfer.off("progress", onProgress);
+    transfer.off("removed", onRemoved);
+    transfer.off("snapshot", onSnapshot);
   });
-  // keep open
   await new Promise(() => {});
 });
 
@@ -287,16 +1111,14 @@ function sanitizeAuth(auth) {
     id: auth.id,
     region: auth.region,
     eptpl: auth.eptpl,
+    eptplcname: auth.eptplcname || "",
     cname: !!auth.cname,
     osspath: auth.osspath || "",
     privilege: auth.privilege || "all",
     hasSecret: !!auth.secret,
     hasStoken: !!auth.stoken,
+    isRequestPay: !!auth.isRequestPay,
   };
-}
-
-function chineseErr(err) {
-  return err?.message || err?.code || "操作失败";
 }
 
 const address = await app.listen({ host: HOST, port: PORT || 0 });
@@ -306,6 +1128,6 @@ const metaDir = path.join(os.homedir(), ".hyh-oss-browser");
 fs.mkdirSync(metaDir, { recursive: true });
 fs.writeFileSync(
   path.join(metaDir, "sidecar.json"),
-  JSON.stringify({ host: HOST, port, token: TOKEN, pid: process.pid }, null, 2)
+  JSON.stringify({ host: HOST, port, token: TOKEN, pid: process.pid }, null, 2),
 );
 console.log(`[sidecar] listening on http://${HOST}:${port}`);

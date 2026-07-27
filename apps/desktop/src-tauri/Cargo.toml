@@ -1,7 +1,7 @@
 [package]
 name = "hyh-oss-browser"
 version = "3.0.0"
-description = "HYH OSS Browser (Tauri)"
+description = "hyh-aliyun-oss-browser (Tauri)"
 authors = ["HyhBlazing"]
 license = "Apache-2.0"
 edition = "2021"
@@ -25,3 +25,4 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-store = "2"
 dirs = "6"
+tauri-plugin-drag = "2.1.1"

@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "HYH OSS Browser",
+  "productName": "hyh-aliyun-oss-browser",
   "version": "3.0.0",
   "identifier": "com.hyhblazing.ossbrowser",
   "build": {
@@ -12,11 +12,15 @@
   "app": {
     "windows": [
       {
-        "title": "OSS Browser",
+        "label": "main",
+        "title": "hyh-aliyun-oss-browser",
         "width": 1220,
         "height": 760,
+        "minWidth": 1024,
+        "minHeight": 640,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "center": true
       }
     ],
     "security": {
