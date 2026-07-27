@@ -40,6 +40,23 @@ fn app_data_dir() -> PathBuf {
     .join(".hyh-oss-browser")
 }
 
+/// Packaged builds ship sidecar under resource_dir; dev uses monorepo path.
+fn resolve_sidecar_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+  if let Ok(resource_dir) = app.path().resource_dir() {
+    let packaged = resource_dir.join("transfer-sidecar");
+    if packaged.join("src").join("index.js").exists() {
+      return Ok(packaged);
+    }
+  }
+
+  let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../transfer-sidecar");
+  if dev.join("src").join("index.js").exists() {
+    return Ok(dev);
+  }
+
+  Err("找不到 sidecar（请确认安装包资源完整，或从仓库根目录开发运行）".into())
+}
+
 fn window_geometry_path() -> PathBuf {
   app_data_dir().join("window.json")
 }
@@ -236,8 +253,7 @@ fn ensure_sidecar(
     return Ok(meta);
   }
 
-  let sidecar_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-    .join("../../transfer-sidecar");
+  let sidecar_dir = resolve_sidecar_dir(&app)?;
   let entry = sidecar_dir.join("src/index.js");
   if !entry.exists() {
     return Err(format!("找不到 sidecar: {}", entry.display()));
