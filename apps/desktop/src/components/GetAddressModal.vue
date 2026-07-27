@@ -1,7 +1,7 @@
 <template>
   <a-modal :visible="visible" title="获取地址" :footer="false" width="680px" unmount-on-close @update:visible="emit('update:visible', $event)" @cancel="emit('update:visible', false)">
     <a-spin :loading="loading" style="width: 100%">
-      <a-form layout="vertical">
+      <a-form :model="{}" layout="vertical">
         <a-form-item label="对象">
           <a-input :model-value="objectName" readonly />
         </a-form-item>

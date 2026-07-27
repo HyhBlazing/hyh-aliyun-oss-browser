@@ -7,7 +7,7 @@
     @cancel="emit('update:visible', false)"
     @update:visible="emit('update:visible', $event)"
   >
-    <a-form layout="vertical">
+    <a-form :model="{}" layout="vertical">
       <a-form-item :label="isCopy ? '复制' : '移动'">
         <div class="keys">
           <div v-for="k in keys" :key="k" class="key">{{ k }}</div>

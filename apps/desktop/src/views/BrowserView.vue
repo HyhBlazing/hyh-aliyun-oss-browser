@@ -802,8 +802,8 @@ const rowSelection = {
 
 function onSelectionChange(keys: (string | number)[]) {
   // v-model 已同步 selectedKeys；这里统一成 string 并写回 store
-  selectedKeys.value = keys.map(String);
-  browser.selected = selectedKeys.value;
+  selectedKeys.value = keys.map((k) => String(k));
+  browser.selected = selectedKeys.value.map(String);
 }
 
 const emptyList = computed(() =>
@@ -1032,7 +1032,7 @@ async function setupNativeFileDrop() {
       const payload = event.payload;
       if (payload.type === "enter" || payload.type === "over") {
         if (browser.bucket && canWrite.value) dropActive.value = true;
-      } else if (payload.type === "leave" || payload.type === "cancel") {
+      } else if (payload.type === "leave" || (payload as { type: string }).type === "cancel") {
         dropActive.value = false;
       } else if (payload.type === "drop") {
         dropActive.value = false;

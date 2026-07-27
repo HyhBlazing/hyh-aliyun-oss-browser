@@ -1,7 +1,7 @@
 <template>
   <a-modal :visible="visible" title="批量获取地址" :footer="false" width="720px" unmount-on-close @update:visible="emit('update:visible', $event)" @cancel="emit('update:visible', false)">
     <a-spin :loading="loading" style="width: 100%">
-      <a-form layout="vertical">
+      <a-form :model="{}" layout="vertical">
         <a-form-item>
           <template #label>
             <span class="field-label">
@@ -31,7 +31,7 @@
           </template>
           <div class="expires-row">
             <a-input-number v-model="expires" :min="60" :max="604800" style="width: 160px" />
-            <a-button type="outline" size="small" :loading="generating" @click="loadAddresses">
+            <a-button type="outline" size="small" :loading="generating" @click="() => loadAddresses()">
               重新生成
             </a-button>
           </div>
