@@ -517,6 +517,11 @@ pub fn run() {
     .plugin(tauri_plugin_fs::init())
     .plugin(tauri_plugin_store::Builder::new().build())
     .plugin(tauri_plugin_drag::init())
+    .plugin(
+      tauri_plugin_autostart::Builder::new()
+        .app_name("hyh-aliyun-oss-browser")
+        .build(),
+    )
     .manage(SidecarState {
       child: Mutex::new(None),
       meta: Mutex::new(None),

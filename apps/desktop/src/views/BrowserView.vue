@@ -407,7 +407,8 @@
       v-model:visible="openSettings"
       title="设置"
       :footer="false"
-      fullscreen
+      width="auto"
+      :fullscreen="false"
       unmount-on-close
       modal-class="settings-modal"
     >
@@ -645,7 +646,6 @@ const showFav = ref(false);
 
 function onSettingsSaved() {
   openSettings.value = false;
-  // 等全屏设置关闭后再提示，避免被遮挡
   window.setTimeout(() => {
     Message.success("已保存设置");
   }, 120);
@@ -2667,14 +2667,19 @@ async function onLogout() {
   background: #ebebef;
 }
 
-:deep(.settings-modal.arco-modal-fullscreen) {
-  border-radius: 0;
+:deep(.settings-modal .arco-modal) {
+  width: min(1190px, 92vw) !important;
+  min-width: min(500px, 96vw) !important;
+  max-width: min(1190px, 92vw) !important;
+  border-radius: 12px;
+  overflow: hidden;
 }
 
-:deep(.settings-modal.arco-modal-fullscreen .arco-modal-body) {
-  max-height: calc(100vh - 64px);
-  overflow: auto;
-  padding: 24px 32px 40px;
+:deep(.settings-modal .arco-modal-body) {
+  height: min(720px, calc(100vh - 120px));
+  max-height: min(720px, calc(100vh - 120px));
+  overflow: hidden;
+  padding: 12px 20px 16px;
 }
 
 .delete-confirm-tip {

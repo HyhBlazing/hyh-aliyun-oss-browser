@@ -1,20 +1,12 @@
 <template>
   <router-view />
 
-  <a-modal
-    v-model:visible="closeVisible"
-    title="退出确认"
-    :mask-closable="false"
-    :esc-to-close="true"
-    unmount-on-close
-    width="440px"
-    @cancel="onStay"
-  >
+  <a-modal v-model:visible="closeVisible" title="关闭确认" :mask-closable="false" :esc-to-close="true" unmount-on-close width="440px" @cancel="onStay">
     <p class="close-msg">{{ closeMessage }}</p>
     <template #footer>
       <a-space>
         <a-button @click="onStay">取消</a-button>
-        <a-button type="secondary" @click="onBackground">后台运行</a-button>
+        <a-button type="secondary" @click="onMinimizeToTray">最小化到托盘</a-button>
         <a-button type="primary" status="danger" :loading="exiting" @click="onExit">
           退出应用
         </a-button>
@@ -27,6 +19,7 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useTransferStore } from "./stores/transfer";
 import { isTauri } from "./lib/local-fs";
+import { getCloseStrategy } from "./lib/close-strategy";
 
 const transfer = useTransferStore();
 const closeVisible = ref(false);
@@ -40,9 +33,9 @@ const activeCount = computed(
 
 const closeMessage = computed(() => {
   if (activeCount.value > 0) {
-    return `当前有 ${activeCount.value} 个传输任务进行中。选择「后台运行」可最小化窗口并继续传输；选择「退出应用」将中断全部任务。`;
+    return `当前有 ${activeCount.value} 个传输任务进行中。选择「最小化到托盘」可隐藏窗口并继续传输；选择「退出应用」将中断全部任务。`;
   }
-  return "确定要退出吗？选择「后台运行」将最小化到任务栏，传输服务会继续保持。";
+  return "确定要关闭吗？选择「最小化到托盘」将隐藏到系统托盘；选择「退出应用」将结束程序。";
 });
 
 onMounted(async () => {
@@ -51,9 +44,18 @@ onMounted(async () => {
     const { getCurrentWindow } = await import("@tauri-apps/api/window");
     const win = getCurrentWindow();
     unlistenClose = await win.onCloseRequested(async (event) => {
-      // 始终拦截，改为弹窗选择
       event.preventDefault();
       if (closeVisible.value || exiting.value) return;
+
+      const strategy = getCloseStrategy();
+      if (strategy === "tray") {
+        await hideToTray();
+        return;
+      }
+      if (strategy === "exit") {
+        await onExit();
+        return;
+      }
       closeVisible.value = true;
     });
   } catch (e) {
@@ -70,15 +72,25 @@ function onStay() {
   closeVisible.value = false;
 }
 
-async function onBackground() {
-  closeVisible.value = false;
+async function hideToTray() {
   if (!isTauri()) return;
   try {
-    const { getCurrentWindow } = await import("@tauri-apps/api/window");
-    await getCurrentWindow().minimize();
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("hide_to_tray");
   } catch (e) {
-    console.warn("minimize failed", e);
+    console.warn("hide to tray failed, fallback minimize", e);
+    try {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      await getCurrentWindow().minimize();
+    } catch (err) {
+      console.warn("minimize failed", err);
+    }
   }
+}
+
+async function onMinimizeToTray() {
+  closeVisible.value = false;
+  await hideToTray();
 }
 
 async function onExit() {
@@ -90,7 +102,6 @@ async function onExit() {
     return;
   }
   try {
-    // 先结束 sidecar，再强制销毁窗口（不会再次触发 closeRequested）
     const { invoke } = await import("@tauri-apps/api/core");
     try {
       await invoke("quit_app");
