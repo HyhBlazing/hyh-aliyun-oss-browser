@@ -1,3 +1,0 @@
-module.exports = {
-  "zh-CN": { label: "简体中文", content: require("./zh-CN") },
-};

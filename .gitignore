@@ -1,23 +1,15 @@
-node_modules
-.idea
-cache
-dist
-dist.asar
-npm-debug.log*
-bower_components
-build
+node_modules/
+.idea/
 .DS_Store
-releases
-_up.sh
-_up0.sh
-ossutil*
-*-app.asar
-.ossutil_checkpoint
-ossutil_output
-app.asar
-
-# tool
+npm-debug.log*
 .vscode/
+.cursor/
+
+# Local build / release output
+cache/
+dist/
+build/
+releases/
 
 # Tauri / monorepo
 apps/**/node_modules
@@ -27,10 +19,6 @@ apps/desktop/src-tauri/gen
 apps/desktop/src-tauri/resources/
 apps/desktop/src-tauri/binaries/transfer-sidecar-*
 apps/transfer-sidecar/dist/
-legacy/node_modules
-legacy/dist
-legacy/build
 
-# generated icon source copy
+# Generated icon source copy
 apps/desktop/src-tauri/icons/logo-source.png
-
