@@ -7,7 +7,7 @@
       </div>
 
       <a-alert v-if="!auth.sidecarOnline" type="warning" style="margin: 12px 0">
-        传输服务未连接。请先启动 sidecar（开发：npm run sidecar）。
+        传输服务未连接。桌面版会自动启动内置服务；若持续失败，请重启应用。开发调试也可手动执行：npm run sidecar。
       </a-alert>
 
       <a-tabs v-model:active-key="loginTab" type="rounded">

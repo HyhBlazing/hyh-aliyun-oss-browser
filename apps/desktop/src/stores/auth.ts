@@ -4,6 +4,7 @@ import { api, configureApi, setRestoreAuthHandler } from "../api/client";
 import {
   addToHistories,
   clearSecureSession,
+  ensureSidecarStarted,
   loadRememberForm,
   loadSecureSession,
   loadSidecarMeta,
@@ -77,7 +78,9 @@ export const useAuthStore = defineStore("auth", () => {
   setRestoreAuthHandler(() => restoreSidecarSession());
 
   async function connectSidecar() {
-    const meta = await loadSidecarMeta();
+    // Tauri 桌面壳应自动拉起内置 / 开发 sidecar，避免依赖手动 npm run sidecar
+    const ensured = await ensureSidecarStarted();
+    const meta = ensured || (await loadSidecarMeta());
     if (meta?.port) {
       configureApi(
         `http://${meta.host || "127.0.0.1"}:${meta.port}`,

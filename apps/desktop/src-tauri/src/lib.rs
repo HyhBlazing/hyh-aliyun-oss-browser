@@ -43,8 +43,20 @@ fn app_data_dir() -> PathBuf {
 }
 
 /// Packaged builds prefer bundled transfer-sidecar binary (no system Node).
-/// Dev falls back to `node apps/transfer-sidecar/src/index.js`.
+/// Debug / `tauri:dev` prefers Node + source tree so local iteration stays simple.
 fn resolve_sidecar_launch(app: &tauri::AppHandle) -> Result<(PathBuf, Vec<String>, Option<PathBuf>), String> {
+  let sidecar_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../transfer-sidecar");
+  let entry = sidecar_dir.join("src").join("index.js");
+
+  // Dev: always prefer source + system Node when available.
+  if cfg!(debug_assertions) && entry.exists() {
+    return Ok((
+      PathBuf::from("node"),
+      vec![entry.to_string_lossy().to_string()],
+      Some(sidecar_dir.clone()),
+    ));
+  }
+
   let candidates: Vec<PathBuf> = {
     let mut list = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
@@ -62,7 +74,6 @@ fn resolve_sidecar_launch(app: &tauri::AppHandle) -> Result<(PathBuf, Vec<String
     let bin_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries");
     list.push(bin_dir.join("transfer-sidecar.exe"));
     list.push(bin_dir.join("transfer-sidecar"));
-    // Common local build triple on Windows
     list.push(bin_dir.join("transfer-sidecar-x86_64-pc-windows-msvc.exe"));
     list.push(bin_dir.join("transfer-sidecar-aarch64-pc-windows-msvc.exe"));
     list
@@ -74,9 +85,6 @@ fn resolve_sidecar_launch(app: &tauri::AppHandle) -> Result<(PathBuf, Vec<String
     }
   }
 
-  // Dev fallback: system Node + source tree
-  let sidecar_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../transfer-sidecar");
-  let entry = sidecar_dir.join("src").join("index.js");
   if entry.exists() {
     return Ok((
       PathBuf::from("node"),
@@ -308,8 +316,8 @@ fn ensure_sidecar(
     .spawn()
     .map_err(|e| format!("启动 sidecar 失败: {e}"))?;
 
-  // wait briefly for meta file
-  for _ in 0..50 {
+  // wait for meta file (pkg binary / cold start can be slower)
+  for _ in 0..100 {
     std::thread::sleep(std::time::Duration::from_millis(100));
     if let Some(mut meta) = read_meta_file() {
       meta.token = token.clone();
@@ -321,6 +329,12 @@ fn ensure_sidecar(
       *state.child.lock().unwrap() = Some(child);
       let _ = app;
       return Ok(meta);
+    }
+    // If process already died, fail fast with a clearer message
+    if let Ok(Some(status)) = child.try_wait() {
+      return Err(format!(
+        "sidecar 进程异常退出（status: {status}）。开发环境请确认已安装 Node.js 且 apps/transfer-sidecar 依赖完整。"
+      ));
     }
   }
 

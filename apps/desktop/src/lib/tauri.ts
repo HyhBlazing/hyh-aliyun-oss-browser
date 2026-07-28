@@ -84,10 +84,16 @@ export async function clearSecureSession() {
   }
 }
 
-export async function ensureSidecarStarted() {
+export async function ensureSidecarStarted(): Promise<SidecarMeta | null> {
   try {
-    return await invoke<SidecarMeta>("ensure_sidecar");
-  } catch {
+    const meta = await invoke<SidecarMeta>("ensure_sidecar");
+    if (meta?.port) {
+      const { configureApi } = await import("../api/client");
+      configureApi(`http://${meta.host || "127.0.0.1"}:${meta.port}`, meta.token);
+    }
+    return meta;
+  } catch (e) {
+    console.warn("ensure_sidecar failed", e);
     return null;
   }
 }

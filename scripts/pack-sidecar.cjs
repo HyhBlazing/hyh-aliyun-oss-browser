@@ -18,15 +18,6 @@ function runNpm(args, cwd) {
   if (r.status !== 0) throw new Error(`npm ${args.join(" ")} failed`);
 }
 
-function runNodeScript(code) {
-  const r = spawnSync(process.execPath, ["-e", code], {
-    cwd: ROOT,
-    stdio: "inherit",
-    env: process.env,
-  });
-  if (r.status !== 0) throw new Error("node script failed");
-}
-
 function rustTargetTriple() {
   const fromEnv =
     process.env.TAURI_ENV_TARGET_TRIPLE ||
@@ -130,13 +121,39 @@ function packWithPkg(triple, outPath) {
   }
 }
 
-async function main() {
-  const triple = rustTargetTriple();
+function triplesToPack() {
+  if (process.env.PACK_SIDECAR_TRIPLES) {
+    return process.env.PACK_SIDECAR_TRIPLES.split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  // Tauri universal macOS needs both arm64 and x64 sidecar binaries.
+  if (
+    process.env.PACK_UNIVERSAL === "1" ||
+    process.argv.includes("--universal")
+  ) {
+    return ["aarch64-apple-darwin", "x86_64-apple-darwin"];
+  }
+  return [rustTargetTriple()];
+}
+
+function packOne(triple) {
   const isWin = triple.includes("windows");
   const outName = `transfer-sidecar-${triple}${isWin ? ".exe" : ""}`;
   const outPath = path.join(OUT_DIR, outName);
+  console.log("pkg binary for", triple, "->", outName);
+  packWithPkg(triple, outPath);
+  const st = fs.statSync(outPath);
+  console.log(
+    "sidecar binary ready:",
+    outPath,
+    `(${Math.round(st.size / 1024 / 1024)} MB)`,
+  );
+}
 
-  console.log("packing sidecar for", triple);
+async function main() {
+  const triples = triplesToPack();
+  console.log("packing sidecar for", triples.join(", "));
 
   runNpm(["install", "--omit=dev"], SIDECAR);
   fs.mkdirSync(path.join(SIDECAR, "dist"), { recursive: true });
@@ -148,15 +165,9 @@ async function main() {
     throw new Error("esbuild did not produce " + BUNDLE_JS);
   }
 
-  console.log("pkg binary...");
-  packWithPkg(triple, outPath);
-
-  const st = fs.statSync(outPath);
-  console.log(
-    "sidecar binary ready:",
-    outPath,
-    `(${Math.round(st.size / 1024 / 1024)} MB)`,
-  );
+  for (const triple of triples) {
+    packOne(triple);
+  }
 
   fs.writeFileSync(
     path.join(OUT_DIR, "README.md"),
@@ -167,6 +178,10 @@ async function main() {
       "Tauri `bundle.externalBin` expects:",
       "",
       "  transfer-sidecar-<rust-target-triple>[.exe]",
+      "",
+      "For macOS universal builds, pack both:",
+      "  aarch64-apple-darwin and x86_64-apple-darwin",
+      "  (set PACK_UNIVERSAL=1).",
       "",
       "Do not commit these binaries.",
       "",
