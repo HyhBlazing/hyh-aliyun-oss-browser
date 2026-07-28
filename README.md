@@ -5,6 +5,8 @@
 
 基于阿里云开源项目 [aliyun/oss-browser](https://github.com/aliyun/oss-browser) 的 **非官方 3.x 桌面客户端**（Tauri 2 + Vue 3）。
 
+作者：**何昀桦**（[HyhBlazing](https://github.com/HyhBlazing)）
+
 用于浏览、管理阿里云 OSS 及兼容私有云对象存储：上传下载、**拖拽到桌面**、预览、地址/二维码、多 AccessKey、传输队列与系统托盘等。
 
 > **重要声明（请先阅读）**  
@@ -259,4 +261,4 @@ npm run desktop:build
 [Apache License 2.0](LICENSE)
 
 Copyright 2016 Aliyun.com（上游原作）  
-Copyright 2026 HyhBlazing（本仓库修改与 3.x 重写部分）
+Copyright 2026 何昀桦 / HyhBlazing（本仓库修改与 3.x 重写部分）
