@@ -3,7 +3,7 @@
   "version": "3.0.2",
   "private": true,
   "type": "module",
-  "description": "HYH OSS Browser monorepo (2.x Electron legacy + 3.x Tauri/Vue)",
+  "description": "HYH OSS Browser 3.x (Tauri + Vue) — unofficial customized OSS client",
   "license": "Apache-2.0",
   "scripts": {
     "sidecar": "npm --prefix apps/transfer-sidecar run start",

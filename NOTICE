@@ -15,8 +15,10 @@ Modifications
 -------------
 Copyright 2026 HyhBlazing
 
-- 2.x: Electron/AngularJS UI customizations (see legacy/)
-- 3.x: Tauri 2 + Vue 3 + Vite rewrite with Node transfer sidecar (see apps/)
+- Current product line: 3.x Tauri 2 + Vue 3 + Vite rewrite with
+  Node transfer sidecar (see apps/)
+- Historical note: earlier 2.x Electron customizations may exist under
+  legacy/ for reference and are not part of the supported product line.
 
 Disclaimer
 ----------
