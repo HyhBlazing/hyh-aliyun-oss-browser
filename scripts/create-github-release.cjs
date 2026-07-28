@@ -9,8 +9,8 @@ const https = require("https");
 
 const OWNER = "HyhBlazing";
 const REPO = "hyh-aliyun-oss-browser";
-const TAG = "v3.0.0";
-const NAME = "v3.0.0";
+const TAG = process.env.RELEASE_TAG || "v3.0.1";
+const NAME = process.env.RELEASE_NAME || TAG;
 const ROOT = path.join(__dirname, "..");
 const BUNDLE_DIR = path.join(
   ROOT,
@@ -23,6 +23,7 @@ const BUNDLE_DIR = path.join(
 );
 
 function collectAssets() {
+  const version = TAG.replace(/^v/, "");
   const files = [];
   const walk = (dir) => {
     if (!fs.existsSync(dir)) return;
@@ -30,16 +31,14 @@ function collectAssets() {
       const full = path.join(dir, name);
       const st = fs.statSync(full);
       if (st.isDirectory()) walk(full);
-      else if (/\.(msi|exe|nsis\.zip)$/i.test(name) || name.endsWith(".zip")) {
+      else if (/\.(msi|exe)$/i.test(name) && name.includes(`_${version}_`)) {
         files.push(full);
       }
     }
   };
   walk(path.join(BUNDLE_DIR, "nsis"));
   walk(path.join(BUNDLE_DIR, "msi"));
-  // Prefer installer artifacts only
-  const preferred = files.filter((f) => /\.(msi|exe)$/i.test(f));
-  return preferred.length ? preferred : files;
+  return files;
 }
 
 function getToken() {
@@ -178,10 +177,14 @@ async function main() {
   console.log("assets:", assets.map((f) => path.basename(f)).join(", "));
 
   const token = getToken();
-  const notes = fs.readFileSync(
-    path.join(ROOT, "release-notes", "3.0.0.zh-CN.md"),
-    "utf8",
+  const notesFile = path.join(
+    ROOT,
+    "release-notes",
+    `${TAG.replace(/^v/, "")}.zh-CN.md`,
   );
+  const notes = fs.existsSync(notesFile)
+    ? fs.readFileSync(notesFile, "utf8")
+    : `# ${TAG}\n\nUnofficial OSS Browser release (based on aliyun/oss-browser, Apache-2.0).\n`;
 
   let release;
   try {

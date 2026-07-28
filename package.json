@@ -1,6 +1,6 @@
 {
   "name": "hyh-aliyun-oss-browser",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "private": true,
   "type": "module",
   "description": "HYH OSS Browser monorepo (2.x Electron legacy + 3.x Tauri/Vue)",
@@ -12,6 +12,6 @@
     "desktop:ui": "npm --prefix apps/desktop run dev",
     "desktop:build": "npm --prefix apps/desktop run tauri:build",
     "legacy:build": "npm --prefix legacy run build --if-present",
-    "pack:sidecar": "node scripts/pack-sidecar.js"
+    "pack:sidecar": "node scripts/pack-sidecar.cjs"
   }
 }

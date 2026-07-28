@@ -1,7 +1,7 @@
 {
   "name": "hyh-oss-browser-desktop",
   "private": true,
-  "version": "3.0.0",
+  "version": "3.0.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "node ../../scripts/prepare-sidecar-resources.cjs && tauri build"
+    "tauri:build": "node ../../scripts/pack-sidecar.cjs && tauri build"
   },
   "dependencies": {
     "@arco-design/web-vue": "^2.58.0",

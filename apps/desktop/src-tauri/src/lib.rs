@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use tauri::{
+  menu::{Menu, MenuItem},
+  tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
   LogicalSize, Manager, PhysicalPosition, PhysicalSize, Position, Size, WindowEvent,
 };
 use tauri_plugin_store::StoreExt;
@@ -40,21 +42,50 @@ fn app_data_dir() -> PathBuf {
     .join(".hyh-oss-browser")
 }
 
-/// Packaged builds ship sidecar under resource_dir; dev uses monorepo path.
-fn resolve_sidecar_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-  if let Ok(resource_dir) = app.path().resource_dir() {
-    let packaged = resource_dir.join("transfer-sidecar");
-    if packaged.join("src").join("index.js").exists() {
-      return Ok(packaged);
+/// Packaged builds prefer bundled transfer-sidecar binary (no system Node).
+/// Dev falls back to `node apps/transfer-sidecar/src/index.js`.
+fn resolve_sidecar_launch(app: &tauri::AppHandle) -> Result<(PathBuf, Vec<String>, Option<PathBuf>), String> {
+  let candidates: Vec<PathBuf> = {
+    let mut list = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+      if let Some(dir) = exe.parent() {
+        list.push(dir.join("transfer-sidecar.exe"));
+        list.push(dir.join("transfer-sidecar"));
+      }
+    }
+    if let Ok(resource_dir) = app.path().resource_dir() {
+      list.push(resource_dir.join("transfer-sidecar.exe"));
+      list.push(resource_dir.join("transfer-sidecar"));
+      list.push(resource_dir.join("binaries").join("transfer-sidecar.exe"));
+      list.push(resource_dir.join("binaries").join("transfer-sidecar"));
+    }
+    let bin_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries");
+    list.push(bin_dir.join("transfer-sidecar.exe"));
+    list.push(bin_dir.join("transfer-sidecar"));
+    // Common local build triple on Windows
+    list.push(bin_dir.join("transfer-sidecar-x86_64-pc-windows-msvc.exe"));
+    list.push(bin_dir.join("transfer-sidecar-aarch64-pc-windows-msvc.exe"));
+    list
+  };
+
+  for path in candidates {
+    if path.exists() {
+      return Ok((path, Vec::new(), None));
     }
   }
 
-  let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../transfer-sidecar");
-  if dev.join("src").join("index.js").exists() {
-    return Ok(dev);
+  // Dev fallback: system Node + source tree
+  let sidecar_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../transfer-sidecar");
+  let entry = sidecar_dir.join("src").join("index.js");
+  if entry.exists() {
+    return Ok((
+      PathBuf::from("node"),
+      vec![entry.to_string_lossy().to_string()],
+      Some(sidecar_dir),
+    ));
   }
 
-  Err("找不到 sidecar（请确认安装包资源完整，或从仓库根目录开发运行）".into())
+  Err("找不到内置 sidecar。请重新安装应用，或在开发环境安装 Node.js 后从仓库启动。".into())
 }
 
 fn window_geometry_path() -> PathBuf {
@@ -253,21 +284,27 @@ fn ensure_sidecar(
     return Ok(meta);
   }
 
-  let sidecar_dir = resolve_sidecar_dir(&app)?;
-  let entry = sidecar_dir.join("src/index.js");
-  if !entry.exists() {
-    return Err(format!("找不到 sidecar: {}", entry.display()));
-  }
+  let (program, args, cwd) = resolve_sidecar_launch(&app)?;
 
   fs::create_dir_all(app_data_dir()).map_err(|e| e.to_string())?;
 
-  let mut child = Command::new("node")
-    .arg(entry)
+  let mut cmd = Command::new(&program);
+  cmd.args(&args)
     .env("SIDECAR_TOKEN", &token)
     .env("SIDECAR_PORT", &port)
-    .current_dir(&sidecar_dir)
     .stdout(Stdio::null())
-    .stderr(Stdio::null())
+    .stderr(Stdio::null());
+  if let Some(dir) = cwd {
+    cmd.current_dir(dir);
+  }
+  #[cfg(windows)]
+  {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    cmd.creation_flags(CREATE_NO_WINDOW);
+  }
+
+  let mut child = cmd
     .spawn()
     .map_err(|e| format!("启动 sidecar 失败: {e}"))?;
 
@@ -404,6 +441,60 @@ fn quit_app(app: tauri::AppHandle, state: tauri::State<'_, SidecarState>) -> Res
   Ok(())
 }
 
+/// 隐藏主窗口到系统托盘（不结束 sidecar）
+#[tauri::command]
+fn hide_to_tray(app: tauri::AppHandle) -> Result<(), String> {
+  if let Some(win) = app.get_webview_window("main") {
+    win.hide().map_err(|e| e.to_string())?;
+  }
+  Ok(())
+}
+
+fn show_main_window(app: &tauri::AppHandle) {
+  if let Some(win) = app.get_webview_window("main") {
+    let _ = win.show();
+    let _ = win.unminimize();
+    let _ = win.set_focus();
+  }
+}
+
+fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
+  let show_i = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+  let quit_i = MenuItem::with_id(app, "quit", "退出应用", true, None::<&str>)?;
+  let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
+
+  let mut builder = TrayIconBuilder::new()
+    .menu(&menu)
+    .tooltip("hyh-aliyun-oss-browser")
+    .on_menu_event(|app, event| match event.id.as_ref() {
+      "show" => show_main_window(app),
+      "quit" => {
+        if let Some(state) = app.try_state::<SidecarState>() {
+          kill_sidecar(&state);
+        }
+        app.exit(0);
+      }
+      _ => {}
+    })
+    .on_tray_icon_event(|tray, event| {
+      if let TrayIconEvent::Click {
+        button: MouseButton::Left,
+        button_state: MouseButtonState::Up,
+        ..
+      } = event
+      {
+        show_main_window(tray.app_handle());
+      }
+    });
+
+  if let Some(icon) = app.default_window_icon() {
+    builder = builder.icon(icon.clone());
+  }
+
+  let _tray = builder.build(app)?;
+  Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
@@ -427,6 +518,9 @@ pub fn run() {
       if let Some(win) = app.get_webview_window("main") {
         apply_window_geometry(&win);
       }
+      if let Err(e) = setup_tray(app) {
+        log::warn!("tray setup failed: {e}");
+      }
       Ok(())
     })
     .invoke_handler(tauri::generate_handler![
@@ -438,7 +532,8 @@ pub fn run() {
       get_drag_icon_path,
       copy_paths_to_dir,
       paths_exist,
-      quit_app
+      quit_app,
+      hide_to_tray
     ])
     .on_window_event(|window, event| {
       match event {

@@ -87,7 +87,8 @@ npm run desktop:build
 ```
 
 产物在 `apps/desktop/src-tauri/target/release/bundle/`。  
-打包前会将 `transfer-sidecar`（含依赖）复制到 Tauri resources；安装包运行仍需本机 **Node.js 20+**。  
+打包前会用 `scripts/pack-sidecar.cjs` 将 sidecar 打成独立可执行文件并随安装包分发，**用户安装后无需再安装 Node.js**。  
+开发调试仍需本机 Node.js。  
 CI 工作流：[`.github/workflows/build-desktop-v3.yml`](.github/workflows/build-desktop-v3.yml)
 
 ## 2.x（legacy）

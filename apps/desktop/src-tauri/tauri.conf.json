@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "hyh-aliyun-oss-browser",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "identifier": "com.hyhblazing.ossbrowser",
   "build": {
     "frontendDist": "../dist",
@@ -30,8 +30,8 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "resources": [
-      "resources/transfer-sidecar"
+    "externalBin": [
+      "binaries/transfer-sidecar"
     ],
     "icon": [
       "icons/32x32.png",

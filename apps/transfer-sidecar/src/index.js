@@ -84,6 +84,8 @@ function requireWrite(req, reply, done) {
 }
 
 const app = Fastify({ logger: false });
+
+async function main() {
 await app.register(cors, { origin: true });
 
 app.addHook("onRequest", authGuard);
@@ -1131,3 +1133,9 @@ fs.writeFileSync(
   JSON.stringify({ host: HOST, port, token: TOKEN, pid: process.pid }, null, 2),
 );
 console.log(`[sidecar] listening on http://${HOST}:${port}`);
+}
+
+main().catch((err) => {
+  console.error("[sidecar] fatal:", err);
+  process.exit(1);
+});
