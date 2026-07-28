@@ -9,7 +9,7 @@ const https = require("https");
 
 const OWNER = "HyhBlazing";
 const REPO = "hyh-aliyun-oss-browser";
-const TAG = process.env.RELEASE_TAG || "v3.0.2";
+const TAG = process.env.RELEASE_TAG || "v3.0.3";
 const NAME = process.env.RELEASE_NAME || TAG;
 const ROOT = path.join(__dirname, "..");
 const BUNDLE_DIR = path.join(
@@ -166,15 +166,20 @@ function uploadAsset(uploadUrlTemplate, token, filePath) {
 }
 
 async function main() {
+  const allowEmpty = process.env.ALLOW_EMPTY_ASSETS === "1";
   const assets = collectAssets();
-  if (!assets.length) {
+  if (!assets.length && !allowEmpty) {
     throw new Error(
       "missing Tauri bundle assets under " +
         BUNDLE_DIR +
-        " (run npm run desktop:build first)",
+        " (run npm run desktop:build first, or set ALLOW_EMPTY_ASSETS=1)",
     );
   }
-  console.log("assets:", assets.map((f) => path.basename(f)).join(", "));
+  if (assets.length) {
+    console.log("assets:", assets.map((f) => path.basename(f)).join(", "));
+  } else {
+    console.log("no local assets; creating/updating release notes only");
+  }
 
   const token = getToken();
   const notesFile = path.join(

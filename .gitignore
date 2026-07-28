@@ -22,3 +22,6 @@ apps/transfer-sidecar/dist/
 
 # Generated icon source copy
 apps/desktop/src-tauri/icons/logo-source.png
+
+# Temporary CI artifact extract for release upload
+.release-ci-tmp/

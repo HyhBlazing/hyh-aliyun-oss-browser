@@ -239,7 +239,7 @@ import { getAutoStartEnabled, setAutoStartEnabled } from "../lib/autostart";
 const LS_SHOW_THUMB = "hyh-oss-show-thumb";
 const APP_NAME = "hyh-aliyun-oss-browser";
 /** 与 apps/desktop/package.json version 保持一致 */
-const APP_VERSION = "3.0.2";
+const APP_VERSION = "3.0.3";
 const GITHUB_RELEASES_URL =
   "https://github.com/HyhBlazing/hyh-aliyun-oss-browser/releases";
 const GITHUB_LATEST_API =
