@@ -1,8 +1,20 @@
 <template>
   <router-view />
 
-  <a-modal v-model:visible="closeVisible" title="关闭确认" :mask-closable="false" :esc-to-close="true" unmount-on-close width="440px" @cancel="onStay">
+  <a-modal
+    v-model:visible="closeVisible"
+    title="关闭确认"
+    :mask-closable="false"
+    :esc-to-close="true"
+    unmount-on-close
+    width="440px"
+    @cancel="onStay"
+  >
     <p class="close-msg">{{ closeMessage }}</p>
+    <div class="remember-row">
+      <a-checkbox v-model="rememberChoice">记住此选择</a-checkbox>
+      <p class="remember-hint">下次关闭时直接执行，不再询问（可在设置中更改）</p>
+    </div>
     <template #footer>
       <a-space>
         <a-button @click="onStay">取消</a-button>
@@ -16,14 +28,16 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useTransferStore } from "./stores/transfer";
 import { isTauri } from "./lib/local-fs";
-import { getCloseStrategy } from "./lib/close-strategy";
+import { getCloseStrategy, setCloseStrategy } from "./lib/close-strategy";
+import { applyUiZoom } from "./lib/ui-zoom";
 
 const transfer = useTransferStore();
 const closeVisible = ref(false);
 const exiting = ref(false);
+const rememberChoice = ref(false);
 let unlistenClose: null | (() => void) = null;
 
 const activeCount = computed(
@@ -38,7 +52,12 @@ const closeMessage = computed(() => {
   return "确定要关闭吗？选择「最小化到托盘」将隐藏到系统托盘；选择「退出应用」将结束程序。";
 });
 
+watch(closeVisible, (visible) => {
+  if (visible) rememberChoice.value = false;
+});
+
 onMounted(async () => {
+  void applyUiZoom();
   if (!isTauri()) return;
   try {
     const { getCurrentWindow } = await import("@tauri-apps/api/window");
@@ -72,6 +91,11 @@ function onStay() {
   closeVisible.value = false;
 }
 
+function rememberIfNeeded(strategy: "tray" | "exit") {
+  if (!rememberChoice.value) return;
+  setCloseStrategy(strategy);
+}
+
 async function hideToTray() {
   if (!isTauri()) return;
   try {
@@ -89,12 +113,14 @@ async function hideToTray() {
 }
 
 async function onMinimizeToTray() {
+  rememberIfNeeded("tray");
   closeVisible.value = false;
   await hideToTray();
 }
 
 async function onExit() {
   if (exiting.value) return;
+  rememberIfNeeded("exit");
   exiting.value = true;
   closeVisible.value = false;
   if (!isTauri()) {
@@ -122,5 +148,20 @@ async function onExit() {
   font-size: 14px;
   line-height: 1.6;
   color: #1d1d1f;
+}
+
+.remember-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 16px;
+}
+
+.remember-hint {
+  margin: 0 0 0 24px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #86868b;
 }
 </style>

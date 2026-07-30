@@ -57,6 +57,16 @@
               <icon-pause />
             </button>
           </a-tooltip>
+          <a-tooltip content="导出任务">
+            <button class="icon-btn" type="button" @click.stop="exportJobs">
+              <icon-export />
+            </button>
+          </a-tooltip>
+          <a-tooltip content="导入任务">
+            <button class="icon-btn" type="button" @click.stop="importJobs">
+              <icon-import />
+            </button>
+          </a-tooltip>
           <a-tooltip content="清空已完成">
             <button class="icon-btn" type="button" @click.stop="clearFinished">
               <icon-check-circle />
@@ -371,6 +381,46 @@ async function pauseAll() {
     Message.success(`已暂停 ${targets.length} 个任务`);
   } catch (e) {
     Message.error(e instanceof Error ? e.message : "暂停失败");
+  }
+}
+
+async function exportJobs() {
+  try {
+    const res = await api.exportJobs();
+    const payload = res.data || { version: 1, jobs: [] };
+    const text = JSON.stringify(payload, null, 2);
+    const blob = new Blob([text], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `oss-transfer-jobs-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    const n = Array.isArray((payload as any).jobs) ? (payload as any).jobs.length : 0;
+    Message.success(n ? `已导出 ${n} 个任务` : "当前没有可导出的任务");
+  } catch (e) {
+    Message.error(e instanceof Error ? e.message : "导出失败");
+  }
+}
+
+async function importJobs() {
+  try {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "application/json,.json";
+    const file = await new Promise<File | null>((resolve) => {
+      input.onchange = () => resolve(input.files?.[0] || null);
+      input.click();
+    });
+    if (!file) return;
+    const text = await file.text();
+    const payload = JSON.parse(text);
+    const res = await api.importJobs(payload);
+    const n = Number((res.data as any)?.imported) || 0;
+    await transfer.refresh();
+    Message.success(res.message || `已导入 ${n} 个任务`);
+  } catch (e) {
+    Message.error(e instanceof Error ? e.message : "导入失败");
   }
 }
 

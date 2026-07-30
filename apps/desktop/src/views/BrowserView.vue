@@ -80,7 +80,12 @@
     </header>
 
     <div class="toolbar">
-      <a-input v-model="browser.searchKeyword" class="search" size="small" allow-clear placeholder="搜索" />
+      <a-input v-model="browser.searchKeyword" class="search" size="small" allow-clear placeholder="当前列表过滤" />
+      <a-tooltip content="全局搜索 Ctrl+Shift+F">
+        <button class="icon-btn" type="button" @click="openGlobalSearch">
+          <icon-search />
+        </button>
+      </a-tooltip>
       <div class="toolbar-actions">
         <template v-if="!browser.bucket">
           <a-tooltip v-if="canWrite" content="新建 Bucket">
@@ -126,6 +131,11 @@
               <icon-settings />
             </button>
           </a-tooltip>
+          <a-tooltip content="完整性校验">
+            <button class="icon-btn" type="button" :disabled="!selectedKeys.length" @click="openVerifySelected">
+              <icon-safe />
+            </button>
+          </a-tooltip>
           <a-tooltip content="解冻归档">
             <button class="icon-btn" type="button" :disabled="!selectedKeys.length" @click="openRestore">
               <icon-history />
@@ -156,17 +166,17 @@
               <icon-download />
             </button>
           </a-tooltip>
-          <a-tooltip v-if="canWrite" content="剪切（移动）">
+          <a-tooltip v-if="canWrite" content="剪切到应用内（Ctrl+X，桶内移动）">
             <button class="icon-btn" type="button" :disabled="!selectedKeys.length" @click="cutSelected">
               <icon-scissor />
             </button>
           </a-tooltip>
-          <a-tooltip v-if="canWrite" content="复制">
+          <a-tooltip v-if="canWrite" content="复制到应用内（Ctrl+Shift+C，桶内复制）">
             <button class="icon-btn" type="button" :disabled="!selectedKeys.length" @click="copySelected">
               <icon-copy />
             </button>
           </a-tooltip>
-          <a-tooltip v-if="canWrite" :content="clipboard.isCopy ? '粘贴（复制）' : '粘贴（移动）'">
+          <a-tooltip v-if="canWrite" :content="clipboard.isCopy ? '粘贴（应用内复制，Ctrl+Shift+V）' : '粘贴（应用内移动，Ctrl+Shift+V）'">
             <button class="icon-btn" type="button" :class="{ active: clipboard.hasItems }" :disabled="!clipboard.hasItems" @click="pasteClipboard">
               <icon-paste />
             </button>
@@ -199,7 +209,26 @@
       </div>
     </div>
 
-    <main class="list" :class="{ 'drop-active': dropActive }" @dragover.prevent="onDragOver" @dragleave="onDragLeave" @drop.prevent="onDrop" @contextmenu="onListBlankContextMenu">
+    <main
+      class="list"
+      @dragover.prevent="onDragOver"
+      @dragleave="onDragLeave"
+      @drop.prevent="onDrop"
+      @contextmenu="onListBlankContextMenu"
+    >
+      <div
+        v-if="dropZoneMode"
+        class="drop-overlay"
+        :class="dropZoneMode === 'ready' ? 'is-ready' : 'is-blocked'"
+        aria-live="polite"
+      >
+        <div class="drop-overlay-card">
+          <icon-upload v-if="dropZoneMode === 'ready'" class="drop-overlay-icon" />
+          <icon-exclamation-circle v-else class="drop-overlay-icon" />
+          <p class="drop-overlay-title">{{ dropOverlayTitle }}</p>
+          <p class="drop-overlay-desc">{{ dropOverlayDesc }}</p>
+        </div>
+      </div>
       <a-spin :loading="browser.loading" style="width: 100%; height: 100%">
         <a-alert v-if="browser.error" type="error" banner>{{ browser.error }}</a-alert>
 
@@ -249,7 +278,18 @@
             </span>
           </template>
           <template #name="{ record }">
-            <div class="name-cell" role="button" tabindex="0" draggable="true" title="单击打开；按住拖到资源管理器文件夹可下载到该位置" :class="{ archived: isArchive(record) }" @click="record.isFolder ? browser.enterFolder(record) : previewItem(record)" @keydown.enter.prevent="record.isFolder ? browser.enterFolder(record) : previewItem(record)" @dragstart="onObjectDragStart($event, record)" @dragend="onObjectDragEnd">
+            <div
+              class="name-cell"
+              role="button"
+              tabindex="0"
+              draggable="true"
+              title="单击打开；按住拖到资源管理器可下载到该位置"
+              :class="{ archived: isArchive(record) }"
+              @click="record.isFolder ? browser.enterFolder(record) : previewItem(record)"
+              @keydown.enter.prevent="record.isFolder ? browser.enterFolder(record) : previewItem(record)"
+              @dragstart="onObjectDragStart($event, record)"
+              @dragend="onObjectDragEnd"
+            >
               <img v-if="showThumb && !record.isFolder && isImage(record.name) && thumbMap[record.name]" :src="thumbMap[record.name]" class="type-icon thumb" alt="" />
               <icon-folder v-else-if="record.isFolder" class="type-icon folder" />
               <icon-file-image v-else-if="isImage(record.name)" class="type-icon image" />
@@ -326,6 +366,9 @@
             <button class="ctx-item" type="button" :disabled="!canWrite" @click="onBlankCtxUpload(true)">
               <icon-upload class="ctx-ico blue" />上传文件夹
             </button>
+            <button class="ctx-item" type="button" :disabled="!canWrite || !clipboard.hasItems" @click="onBlankCtxPaste">
+              <icon-paste class="ctx-ico blue" />粘贴（桶内）
+            </button>
             <div class="ctx-divider" />
             <button class="ctx-item" type="button" @click="onBlankCtxRefresh">
               <icon-refresh class="ctx-ico" />刷新
@@ -341,10 +384,10 @@
               <icon-download class="ctx-ico blue" />下载
             </button>
             <button class="ctx-item" type="button" :disabled="!canWrite" @click="onCtxCopy">
-              <icon-copy class="ctx-ico blue" />复制
+              <icon-copy class="ctx-ico blue" />复制（桶内）
             </button>
             <button class="ctx-item" type="button" :disabled="!canWrite" @click="onCtxCut">
-              <icon-scissor class="ctx-ico blue" />移动
+              <icon-scissor class="ctx-ico blue" />剪切（桶内）
             </button>
             <button class="ctx-item" type="button" :disabled="!canWrite" @click="onCtxRename">
               <icon-edit class="ctx-ico blue" />重命名
@@ -364,7 +407,15 @@
             <button class="ctx-item" type="button" :disabled="!!ctxMenu.record.isFolder" @click="onCtxMeta">
               <icon-settings class="ctx-ico" />HTTP 头
             </button>
-            <button class="ctx-item" type="button" :disabled="!canWrite || !!ctxMenu.record.isFolder" @click="onCtxSymlink">
+            <button class="ctx-item" type="button" @click="onCtxVerify">
+              <icon-safe class="ctx-ico green" />完整性校验
+            </button>
+            <button
+              class="ctx-item"
+              type="button"
+              :disabled="!canWrite || !!ctxMenu.record.isFolder"
+              @click="onCtxSymlink"
+            >
               <icon-link class="ctx-ico" />设置软链接
             </button>
             <div class="ctx-divider" />
@@ -440,6 +491,22 @@
     <ObjectAclModal v-model:visible="aclModal.visible" :bucket="browser.bucket" :object-key="aclModal.key" :region="browser.bucketRegion" />
 
     <ObjectMetaModal v-model:visible="metaModal.visible" :bucket="browser.bucket" :object-key="metaModal.key" :region="browser.bucketRegion" />
+    <VerifyModal
+      v-model:visible="verifyModal.visible"
+      :bucket="verifyModal.bucket"
+      :region="verifyModal.region"
+      :object-key="verifyModal.objectKey"
+      :keys="verifyModal.keys"
+      :prefix="verifyModal.prefix"
+      :strip-prefix="verifyModal.stripPrefix"
+    />
+
+    <GlobalSearchModal
+      v-model:visible="showGlobalSearch"
+      :bucket-names="globalSearchBucketNames"
+      :default-bucket="browser.bucket"
+      @batch="onGlobalSearchBatch"
+    />
 
     <RestoreModal v-model:visible="restoreModal.visible" :bucket="browser.bucket" :keys="restoreModal.keys" :prefix="browser.prefix" :region="browser.bucketRegion" />
 
@@ -501,6 +568,7 @@ import {
   rememberDownloadDirectory,
   resolveDownloadDirectory,
 } from "../lib/local-fs";
+import { startSearchAutoIndexWatch } from "../lib/search-auto-index-watch";
 import { listHistories, type AuthHistoryItem } from "../lib/tauri";
 import TransferDock from "../components/TransferDock.vue";
 import SettingsPanel from "../components/SettingsPanel.vue";
@@ -510,6 +578,9 @@ import CreateFolderModal from "../components/CreateFolderModal.vue";
 import RenameModal from "../components/RenameModal.vue";
 import ObjectAclModal from "../components/ObjectAclModal.vue";
 import ObjectMetaModal from "../components/ObjectMetaModal.vue";
+import VerifyModal from "../components/VerifyModal.vue";
+import GlobalSearchModal from "../components/GlobalSearchModal.vue";
+import type { SearchHit } from "../components/GlobalSearchModal.vue";
 import RestoreModal from "../components/RestoreModal.vue";
 import SymlinkModal from "../components/SymlinkModal.vue";
 import BucketAclModal from "../components/BucketAclModal.vue";
@@ -519,6 +590,9 @@ import AudioSpectrumPlayer from "../components/AudioSpectrumPlayer.vue";
 
 const auth = useAuthStore();
 const browser = useBrowserStore();
+const globalSearchBucketNames = computed(() =>
+  browser.buckets.map((b) => b.name)
+);
 const transfer = useTransferStore();
 const fav = useFavoritesStore();
 const clipboard = useClipboardStore();
@@ -643,6 +717,7 @@ const showCreate = ref(false);
 const showCreateFolder = ref(false);
 const openSettings = ref(false);
 const showFav = ref(false);
+const showGlobalSearch = ref(false);
 
 function onSettingsSaved() {
   openSettings.value = false;
@@ -650,7 +725,40 @@ function onSettingsSaved() {
     Message.success("已保存设置");
   }, 120);
 }
-const dropActive = ref(false);
+const dropZoneMode = ref<null | "ready" | "blocked-bucket" | "blocked-readonly">(null);
+
+const dropOverlayTitle = computed(() => {
+  if (dropZoneMode.value === "ready") return "松开以上传";
+  if (dropZoneMode.value === "blocked-readonly") return "无法上传";
+  if (dropZoneMode.value === "blocked-bucket") return "无法上传";
+  return "";
+});
+
+const dropOverlayDesc = computed(() => {
+  if (dropZoneMode.value === "ready") {
+    const prefix = browser.prefix ? `当前目录：${browser.prefix}` : "当前 Bucket 根目录";
+    return prefix;
+  }
+  if (dropZoneMode.value === "blocked-readonly") return "当前为只读权限";
+  if (dropZoneMode.value === "blocked-bucket") return "请先进入 Bucket 后再拖入文件";
+  return "";
+});
+
+function setDropZoneFromContext() {
+  if (!browser.bucket) {
+    dropZoneMode.value = "blocked-bucket";
+    return;
+  }
+  if (!canWrite.value) {
+    dropZoneMode.value = "blocked-readonly";
+    return;
+  }
+  dropZoneMode.value = "ready";
+}
+
+function clearDropZone() {
+  dropZoneMode.value = null;
+}
 const OSS_DRAG_MIME = "application/x-hyh-oss-keys";
 const objectDrag = reactive({
   active: false,
@@ -661,6 +769,7 @@ let unlistenNativeDrop: null | (() => void) = null;
 let dragIconPath = "";
 let dragSession = 0;
 const selectedKeys = ref<(string | number)[]>([]);
+
 const createForm = reactive({
   name: "",
   region: "oss-cn-hangzhou",
@@ -692,6 +801,15 @@ const renameModal = reactive({
 });
 const aclModal = reactive({ visible: false, key: "" });
 const metaModal = reactive({ visible: false, key: "" });
+const verifyModal = reactive({
+  visible: false,
+  bucket: "",
+  region: "",
+  objectKey: "",
+  keys: [] as string[],
+  prefix: "",
+  stripPrefix: "",
+});
 const restoreModal = reactive({ visible: false, keys: [] as string[] });
 const symlinkModal = reactive({
   visible: false,
@@ -859,6 +977,7 @@ onMounted(async () => {
   stopJobFinished = transfer.onJobFinished((job) => {
     onTransferJobFinished(job);
   });
+  stopAutoIndexWatch = startSearchAutoIndexWatch();
   await browser.bootstrapFromSession();
   loadThumbs();
   await setupNativeFileDrop();
@@ -870,6 +989,8 @@ onUnmounted(() => {
   unlistenNativeDrop = null;
   stopJobFinished?.();
   stopJobFinished = null;
+  stopAutoIndexWatch?.();
+  stopAutoIndexWatch = null;
   if (listRefreshTimer) {
     clearTimeout(listRefreshTimer);
     listRefreshTimer = 0;
@@ -878,13 +999,32 @@ onUnmounted(() => {
 });
 
 let stopJobFinished: null | (() => void) = null;
+let stopAutoIndexWatch: null | (() => void) = null;
 let listRefreshTimer = 0;
 
 function isEditableShortcutTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false;
-  const tag = target.tagName;
-  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
   if (target.isContentEditable) return true;
+  const tag = target.tagName;
+  if (tag === "TEXTAREA" || tag === "SELECT") return true;
+  if (tag === "INPUT") {
+    const type = (target.getAttribute("type") || "text").toLowerCase();
+    // 表格勾选框/按钮不算“正在输入”
+    if (
+      ["checkbox", "radio", "button", "submit", "reset", "file", "image", "hidden"].includes(type)
+    ) {
+      return false;
+    }
+    return true;
+  }
+  // 点在 checkbox 包装节点上时，closest 到 arco-checkbox 也不应拦截粘贴上传
+  if (target.closest(".arco-checkbox, .arco-radio, .arco-table-td, .arco-table-tr, .arco-table")) {
+    // 仍可能落在单元格内的真实输入框（极少），再精确判断
+    if (target.closest(".arco-input, .arco-textarea, .arco-input-tag, .arco-select-view, .arco-picker")) {
+      return true;
+    }
+    return false;
+  }
   return !!target.closest(
     ".arco-input, .arco-textarea, .arco-input-tag, .arco-select-view, .arco-picker, [contenteditable='true']"
   );
@@ -898,12 +1038,14 @@ function hasBlockingOverlay() {
     showFav.value ||
     showCreate.value ||
     showCreateFolder.value ||
+    showGlobalSearch.value ||
     pathPrompt.visible ||
     addressModal.visible ||
     batchAddressModal.visible ||
     renameModal.visible ||
     aclModal.visible ||
     metaModal.visible ||
+    verifyModal.visible ||
     restoreModal.visible ||
     symlinkModal.visible ||
     bucketAclModal.visible ||
@@ -997,6 +1139,30 @@ function onBrowserShortcut(e: KeyboardEvent) {
   if (key === "F5" || key === "BrowserRefresh" || (mod && !alt && lower === "r")) {
     e.preventDefault();
     void browser.refresh();
+    return;
+  }
+
+  // 全局搜索：Ctrl+Shift+F
+  if (mod && shift && !alt && (lower === "f" || e.code === "KeyF")) {
+    e.preventDefault();
+    openGlobalSearch();
+    return;
+  }
+
+  // Ctrl+X / Ctrl+Shift+C：应用内剪切 / 复制（桶内移动复制）
+  if (mod && !alt && !shift && (lower === "x" || e.code === "KeyX")) {
+    e.preventDefault();
+    if (canWrite.value) cutSelected();
+    return;
+  }
+  if (mod && !alt && shift && (lower === "c" || e.code === "KeyC")) {
+    e.preventDefault();
+    if (canWrite.value) copySelected();
+    return;
+  }
+  if (mod && !alt && shift && (lower === "v" || e.code === "KeyV")) {
+    e.preventDefault();
+    if (canWrite.value) void pasteClipboard();
   }
 }
 
@@ -1031,11 +1197,11 @@ async function setupNativeFileDrop() {
     unlistenNativeDrop = await getCurrentWebviewWindow().onDragDropEvent((event) => {
       const payload = event.payload;
       if (payload.type === "enter" || payload.type === "over") {
-        if (browser.bucket && canWrite.value) dropActive.value = true;
+        setDropZoneFromContext();
       } else if (payload.type === "leave" || (payload as { type: string }).type === "cancel") {
-        dropActive.value = false;
+        clearDropZone();
       } else if (payload.type === "drop") {
-        dropActive.value = false;
+        clearDropZone();
         void handleUploadPaths(payload.paths || []);
       }
     });
@@ -1087,6 +1253,37 @@ function openObjectMeta() {
   metaModal.visible = true;
 }
 
+function openVerifySelected() {
+  const keys = selectedKeys.value.map(String);
+  if (!keys.length) {
+    Message.warning("请先选择对象或目录");
+    return;
+  }
+  if (keys.length === 1) {
+    const rec = browser.filteredObjects.find((o: any) => o.name === keys[0]);
+    if (rec?.isFolder) {
+      const prefix = keys[0].endsWith("/") ? keys[0] : `${keys[0]}/`;
+      openVerifyModal({ prefix, stripPrefix: prefix });
+      return;
+    }
+    openVerifyModal({ objectKey: keys[0] });
+    return;
+  }
+  // 多选：文件直接校验；若含目录则用当前前缀作为 strip，仅校验选中的非目录项
+  const fileKeys = keys.filter((k) => {
+    const rec = browser.filteredObjects.find((o: any) => o.name === k);
+    return !rec?.isFolder && !k.endsWith("/");
+  });
+  if (!fileKeys.length) {
+    Message.warning("请选择文件，或单独选择一个目录做批量校验");
+    return;
+  }
+  openVerifyModal({
+    keys: fileKeys,
+    stripPrefix: browser.prefix || "",
+  });
+}
+
 function openRestore() {
   const keys = selectedKeys.value.map(String);
   if (!keys.length) {
@@ -1132,20 +1329,26 @@ async function onRenameDone() {
 }
 
 function onDragOver(e: DragEvent) {
-  if (!browser.bucket || !canWrite.value) return;
   const types = e.dataTransfer?.types ? Array.from(e.dataTransfer.types) : [];
   // 仅外部文件拖入高亮；内部对象拖拽不触发上传态
   if (types.includes("Files") && !types.includes(OSS_DRAG_MIME)) {
-    dropActive.value = true;
-    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+    setDropZoneFromContext();
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = dropZoneMode.value === "ready" ? "copy" : "none";
+    }
   }
 }
 
-function onDragLeave() {
-  dropActive.value = false;
+function onDragLeave(e: DragEvent) {
+  // 离开到子元素时不清除，避免闪烁
+  const related = e.relatedTarget as Node | null;
+  const list = e.currentTarget as HTMLElement | null;
+  if (list && related && list.contains(related)) return;
+  clearDropZone();
 }
 
 async function handleUploadPaths(paths: string[]) {
+  clearDropZone();
   if (!browser.bucket) {
     Message.warning("请先进入 Bucket 再上传");
     return;
@@ -1178,7 +1381,7 @@ async function handleUploadPaths(paths: string[]) {
 }
 
 async function onDrop(e: DragEvent) {
-  dropActive.value = false;
+  clearDropZone();
   if (!browser.bucket || !canWrite.value) return;
   // Tauri 原生 drop 已在 onDragDropEvent 处理；此处作 HTML5 兜底
   if (isTauri()) return;
@@ -1217,6 +1420,29 @@ function onObjectDragStart(e: DragEvent, record: { name: string }) {
   }
 }
 
+/** 将 OSS 选中项同步下载到临时目录，返回可供系统拖拽使用的本地路径 */
+async function prepareLocalPathsForKeys(keys: string[], tempFolder: string): Promise<string[]> {
+  if (!browser.bucket || !keys.length) return [];
+  const { tempDir, join } = await import("@tauri-apps/api/path");
+  const { invoke } = await import("@tauri-apps/api/core");
+  const base = await tempDir();
+  const localDir = await join(base, tempFolder, String(Date.now()));
+  const res = await api.downloadNow({
+    bucket: browser.bucket,
+    keys,
+    localDir,
+    ...(browser.bucketRegion ? { region: browser.bucketRegion } : {}),
+    stripPrefix: browser.prefix || "",
+  });
+  const paths = (res.data?.paths || []).filter(Boolean);
+  if (!paths.length) return [];
+  const alive = await invoke<boolean>("paths_exist", { paths });
+  if (!alive) {
+    throw new Error("临时文件未就绪，请重试或改用下载按钮");
+  }
+  return paths;
+}
+
 async function beginNativeDragOut(keys: string[]) {
   if (!browser.bucket || !keys.length || objectDrag.preparing) return;
   objectDrag.preparing = true;
@@ -1248,30 +1474,15 @@ async function beginNativeDragOut(keys: string[]) {
   };
 
   try {
-    const { tempDir, join, desktopDir, basename } = await import("@tauri-apps/api/path");
+    const { desktopDir, basename } = await import("@tauri-apps/api/path");
     const { invoke } = await import("@tauri-apps/api/core");
     const { getCurrentWindow } = await import("@tauri-apps/api/window");
     const { startDrag } = await import("@crabnebula/tauri-plugin-drag");
-    const base = await tempDir();
-    const localDir = await join(base, "hyh-oss-drag", String(Date.now()));
-    const res = await api.downloadNow({
-      bucket: browser.bucket,
-      keys,
-      localDir,
-      ...(browser.bucketRegion ? { region: browser.bucketRegion } : {}),
-      stripPrefix: browser.prefix || "",
-    });
+    const paths = await prepareLocalPathsForKeys(keys, "hyh-oss-drag");
     if (session !== dragSession) return;
 
-    const paths = (res.data?.paths || []).filter(Boolean);
     if (!paths.length) {
       Message.warning("没有可拖拽的文件");
-      return;
-    }
-
-    const alive = await invoke<boolean>("paths_exist", { paths });
-    if (!alive) {
-      Message.error("临时文件未就绪，请重试或改用下载按钮");
       return;
     }
 
@@ -1513,6 +1724,12 @@ function onBlankCtxUpload(asFolder: boolean) {
   void pickUpload(asFolder);
 }
 
+function onBlankCtxPaste() {
+  closeCtxMenu();
+  if (!canWrite.value) return;
+  void pasteClipboard();
+}
+
 async function onBlankCtxRefresh() {
   closeCtxMenu();
   await browser.refresh();
@@ -1627,6 +1844,42 @@ function onCtxMeta() {
   metaModal.visible = true;
 }
 
+function openVerifyModal(opts: {
+  objectKey?: string;
+  keys?: string[];
+  prefix?: string;
+  stripPrefix?: string;
+}) {
+  if (!browser.bucket) {
+    Message.warning("请先选择 Bucket");
+    return;
+  }
+  verifyModal.bucket = browser.bucket;
+  verifyModal.region = browser.bucketRegion || "";
+  verifyModal.objectKey = opts.objectKey || "";
+  verifyModal.keys = opts.keys || [];
+  verifyModal.prefix = opts.prefix || "";
+  verifyModal.stripPrefix = opts.stripPrefix || "";
+  verifyModal.visible = true;
+}
+
+function onCtxVerify() {
+  const rec = ctxMenu.record;
+  closeCtxMenu();
+  if (!rec) return;
+  if (rec.isFolder) {
+    const prefix = String(rec.name || "").endsWith("/")
+      ? String(rec.name)
+      : `${rec.name}/`;
+    openVerifyModal({
+      prefix,
+      stripPrefix: prefix,
+    });
+    return;
+  }
+  openVerifyModal({ objectKey: rec.name });
+}
+
 function onCtxSymlink() {
   const rec = ctxMenu.record;
   closeCtxMenu();
@@ -1704,6 +1957,131 @@ function clipboardDisplayName(key: string, fromPrefix: string) {
   let name = key;
   if (fromPrefix && name.startsWith(fromPrefix)) name = name.slice(fromPrefix.length);
   return name.replace(/\/$/, "") || key;
+}
+
+function openGlobalSearch() {
+  showGlobalSearch.value = true;
+}
+
+function parentPrefixOfKey(key: string) {
+  const k = String(key || "");
+  const i = k.lastIndexOf("/");
+  if (i < 0) return "";
+  return k.slice(0, i + 1);
+}
+
+function groupSearchHitsByBucket(items: SearchHit[]) {
+  const map = new Map<string, SearchHit[]>();
+  for (const it of items) {
+    const list = map.get(it.bucket) || [];
+    list.push(it);
+    map.set(it.bucket, list);
+  }
+  return map;
+}
+
+async function onGlobalSearchBatch(
+  action: "download" | "delete" | "address" | "verify" | "open",
+  items: SearchHit[]
+) {
+  if (!items.length) return;
+  if (action === "open") {
+    const first = items[0];
+    const prefix = parentPrefixOfKey(first.key);
+    showGlobalSearch.value = false;
+    await browser.go(`oss://${first.bucket}/${prefix}`);
+    return;
+  }
+
+  if (action === "address") {
+    const groups = groupSearchHitsByBucket(items);
+    if (groups.size > 1) {
+      Message.warning("获取地址请选择同一 Bucket 内的对象");
+      return;
+    }
+    const [bucket, list] = [...groups.entries()][0];
+    if (bucket !== browser.bucket) {
+      await browser.go(`oss://${bucket}/`);
+    }
+    openBatchAddressWithKeys(list.map((i) => i.key));
+    return;
+  }
+
+  if (action === "verify") {
+    const groups = groupSearchHitsByBucket(items);
+    if (groups.size > 1) {
+      Message.warning("完整性校验请选择同一 Bucket 内的对象");
+      return;
+    }
+    const [bucket, list] = [...groups.entries()][0];
+    const region = browser.resolveRegionFor(bucket) || "";
+    verifyModal.bucket = bucket;
+    verifyModal.region = region;
+    verifyModal.prefix = "";
+    verifyModal.stripPrefix = "";
+    if (list.length === 1) {
+      verifyModal.objectKey = list[0].key;
+      verifyModal.keys = [];
+    } else {
+      verifyModal.objectKey = "";
+      verifyModal.keys = list.map((i) => i.key);
+    }
+    verifyModal.visible = true;
+    return;
+  }
+
+  if (action === "download") {
+    try {
+      const dir = await resolveDownloadDirectory(askLocalPath, { preferPrompt: true });
+      if (!dir) return;
+      rememberDownloadDirectory(dir);
+      let queued = 0;
+      for (const [bucket, list] of groupSearchHitsByBucket(items)) {
+        const region = browser.resolveRegionFor(bucket) || undefined;
+        await transfer.download(
+          bucket,
+          list.map((i) => i.key),
+          dir,
+          region,
+          ""
+        );
+        queued += list.length;
+      }
+      Message.success(`已加入下载队列 ${queued} 个 → ${dir}`);
+    } catch (e) {
+      Message.error(e instanceof Error ? e.message : "下载失败");
+    }
+    return;
+  }
+
+  if (action === "delete") {
+    if (!canWrite.value) {
+      Message.warning("当前为只读权限");
+      return;
+    }
+    const names = items.map((i) => i.key);
+    Modal.warning({
+      title: "确认删除",
+      content: deleteConfirmContent(names),
+      hideCancel: false,
+      onOk: async () => {
+        try {
+          for (const [bucket, list] of groupSearchHitsByBucket(items)) {
+            const region = browser.resolveRegionFor(bucket) || undefined;
+            await api.deleteObjects({
+              bucket,
+              keys: list.map((i) => i.key),
+              region,
+            });
+          }
+          Message.success("已删除");
+          await browser.refresh();
+        } catch (e) {
+          Message.error(e instanceof Error ? e.message : "删除失败");
+        }
+      },
+    });
+  }
 }
 
 async function deleteBuckets() {
@@ -2329,6 +2707,7 @@ async function onLogout() {
 }
 
 .list {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow: hidden;
@@ -2349,10 +2728,75 @@ async function onLogout() {
   width: 100%;
 }
 
-.list.drop-active {
-  outline: 2px dashed #c7c7cc;
-  outline-offset: -4px;
-  background: #fafafa;
+.drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  backdrop-filter: blur(1px);
+}
+
+.drop-overlay.is-ready {
+  background: rgba(0, 122, 255, 0.1);
+  box-shadow: inset 0 0 0 2px #007aff;
+}
+
+.drop-overlay.is-blocked {
+  background: rgba(255, 159, 10, 0.12);
+  box-shadow: inset 0 0 0 2px #ff9f0a;
+}
+
+.drop-overlay-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 220px;
+  max-width: min(420px, 86%);
+  padding: 20px 28px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.08);
+  text-align: center;
+}
+
+.drop-overlay.is-ready .drop-overlay-card {
+  border: 1px solid rgba(0, 122, 255, 0.35);
+}
+
+.drop-overlay.is-blocked .drop-overlay-card {
+  border: 1px solid rgba(255, 159, 10, 0.4);
+}
+
+.drop-overlay-icon {
+  font-size: 28px;
+  margin-bottom: 4px;
+}
+
+.drop-overlay.is-ready .drop-overlay-icon {
+  color: #007aff;
+}
+
+.drop-overlay.is-blocked .drop-overlay-icon {
+  color: #ff9f0a;
+}
+
+.drop-overlay-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #1d1d1f;
+}
+
+.drop-overlay-desc {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+  color: #6e6e73;
+  word-break: break-all;
 }
 
 .search {

@@ -1,6 +1,6 @@
 [package]
 name = "hyh-oss-browser"
-version = "3.0.3"
+version = "3.0.4"
 description = "hyh-aliyun-oss-browser (Tauri)"
 authors = ["HyhBlazing"]
 license = "Apache-2.0"
@@ -27,3 +27,7 @@ tauri-plugin-store = "2"
 dirs = "6"
 tauri-plugin-drag = "2.1.1"
 tauri-plugin-autostart = "2"
+
+[target.'cfg(windows)'.dependencies]
+clipboard-win = { version = "5.4", features = ["std"] }
+winreg = "0.55"

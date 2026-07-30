@@ -7,7 +7,12 @@
       </div>
 
       <a-alert v-if="!auth.sidecarOnline" type="warning" style="margin: 12px 0">
-        传输服务未连接。桌面版会自动启动内置服务；若持续失败，请重启应用。开发调试也可手动执行：npm run sidecar。
+        <template #title>传输服务未连接</template>
+        <div>
+          桌面版会自动启动内置服务；若持续失败，请重启应用。开发调试也可手动执行：
+          <code>npm run sidecar</code>
+        </div>
+        <div v-if="auth.sidecarError" class="sidecar-err">{{ auth.sidecarError }}</div>
       </a-alert>
 
       <a-tabs v-model:active-key="loginTab" type="rounded">
@@ -308,6 +313,14 @@ async function onSubmitToken() {
   align-items: center;
   justify-content: center;
   padding: 32px;
+}
+
+.sidecar-err {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #86868b;
+  word-break: break-all;
 }
 
 .login-card {

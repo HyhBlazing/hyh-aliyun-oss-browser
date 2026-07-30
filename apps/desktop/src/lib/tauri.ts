@@ -84,7 +84,7 @@ export async function clearSecureSession() {
   }
 }
 
-export async function ensureSidecarStarted(): Promise<SidecarMeta | null> {
+export async function ensureSidecarStarted(): Promise<SidecarMeta> {
   try {
     const meta = await invoke<SidecarMeta>("ensure_sidecar");
     if (meta?.port) {
@@ -93,8 +93,9 @@ export async function ensureSidecarStarted(): Promise<SidecarMeta | null> {
     }
     return meta;
   } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
     console.warn("ensure_sidecar failed", e);
-    return null;
+    throw new Error(msg || "启动传输服务失败");
   }
 }
 

@@ -39,20 +39,37 @@ async function request<T>(
   method: string,
   path: string,
   body?: unknown,
-  retried = false
+  opts?: { signal?: AbortSignal; retried?: boolean }
 ): Promise<ApiResult<T>> {
-  const res = await fetch(`${baseUrl}${path}`, {
-    method,
-    headers: {
-      "Content-Type": "application/json",
-      "x-sidecar-token": token,
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  const retried = !!opts?.retried;
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl}${path}`, {
+      method,
+      headers: {
+        "Content-Type": "application/json",
+        "x-sidecar-token": token,
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: opts?.signal,
+    });
+  } catch (e) {
+    if (
+      opts?.signal?.aborted ||
+      (e instanceof DOMException && e.name === "AbortError") ||
+      (e instanceof Error && e.name === "AbortError")
+    ) {
+      throw new DOMException("已取消", "AbortError");
+    }
+    throw e;
+  }
   let json: ApiResult<T>;
   try {
     json = (await res.json()) as ApiResult<T>;
   } catch {
+    if (opts?.signal?.aborted) {
+      throw new DOMException("已取消", "AbortError");
+    }
     throw new Error(`请求失败 (${res.status})`);
   }
 
@@ -65,13 +82,17 @@ async function request<T>(
     ) {
       const ok = await restoreAuthHandler();
       if (ok) {
-        return request<T>(method, path, body, true);
+        return request<T>(method, path, body, { ...opts, retried: true });
       }
     }
   }
 
   if (!res.ok || json.code !== 0) {
-    throw new Error(json.message || `请求失败 (${res.status})`);
+    const raw = String(json.message || "");
+    if (/Route\s+\w+:\/.+not found/i.test(raw) || /接口不存在/.test(raw)) {
+      throw new Error("搜索服务未就绪，请完全退出应用后重新打开再试");
+    }
+    throw new Error(raw || `请求失败 (${res.status})`);
   }
   return json;
 }
@@ -116,6 +137,55 @@ export const api = {
   },
   putObjectMeta: (payload: Record<string, unknown>) =>
     request("PUT", "/objects/meta", payload),
+  verifyObject: (payload: Record<string, unknown>) =>
+    request("POST", "/objects/verify", payload),
+  verifyBatch: (payload: Record<string, unknown>) =>
+    request("POST", "/objects/verify/batch", payload),
+  searchObjects: (
+    payload: Record<string, unknown>,
+    opts?: { signal?: AbortSignal }
+  ) =>
+    request<{
+      items: Record<string, unknown>[];
+      truncated?: boolean;
+      scanned?: number;
+      total_matched?: number;
+      mode?: string;
+    }>("POST", "/objects/search", payload, opts),
+  getSearchIndexStatus: () =>
+    request<{
+      total_objects: number;
+      objects_bytes?: number;
+      index_bytes?: number;
+      last_indexed_at: number | null;
+      buckets: Array<{
+        bucket: string;
+        object_count: number;
+        last_indexed_at: number | null;
+        status: string;
+      }>;
+    }>("GET", "/search/index/status"),
+  listSearchIndexJobs: () =>
+    request<{
+      list: Record<string, unknown>[];
+      latest_auto: Record<string, unknown> | null;
+    }>("GET", "/search/index/jobs"),
+  buildSearchIndex: (payload: Record<string, unknown> = {}) =>
+    request<{ job_id: string }>("POST", "/search/index/build", payload),
+  refreshSearchIndex: (payload: Record<string, unknown> = {}) =>
+    request<{ job_id: string }>("POST", "/search/index/refresh", payload),
+  clearSearchIndex: (payload: Record<string, unknown> = {}) =>
+    request("DELETE", "/search/index", payload),
+  getSearchIndexJob: (id: string) =>
+    request<Record<string, unknown>>(
+      "GET",
+      `/search/index/jobs/${encodeURIComponent(id)}`
+    ),
+  cancelSearchIndexJob: (id: string) =>
+    request(
+      "POST",
+      `/search/index/jobs/${encodeURIComponent(id)}/cancel`
+    ),
   restoreObjects: (payload: Record<string, unknown>) =>
     request("POST", "/objects/restore", payload),
   putSymlink: (payload: Record<string, unknown>) =>
@@ -208,35 +278,56 @@ export const api = {
   removeJob: (id: string) => request("POST", "/transfer/jobs/remove", { id }),
   clearJobs: (payload: { type?: string; onlyFinished?: boolean }) =>
     request("POST", "/transfer/jobs/clear", payload),
+  persistJobs: () => request("POST", "/transfer/persist"),
+  exportJobs: () => request("GET", "/transfer/export"),
+  importJobs: (payload: Record<string, unknown>) =>
+    request("POST", "/transfer/import", payload),
+  listTransferHistory: (limit = 200) =>
+    request("GET", `/transfer/history?limit=${limit}`),
 };
 
 export function openTransferEvents(onMessage: (data: unknown) => void) {
   const ctrl = new AbortController();
-  (async () => {
-    const res = await fetch(`${baseUrl}/transfer/events`, {
-      headers: { "x-sidecar-token": token },
-      signal: ctrl.signal,
-    });
-    if (!res.body) return;
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const parts = buf.split("\n\n");
-      buf = parts.pop() || "";
-      for (const part of parts) {
-        const line = part.split("\n").find((l) => l.startsWith("data: "));
-        if (!line) continue;
-        try {
-          onMessage(JSON.parse(line.slice(6)));
-        } catch {
-          /* ignore */
+  let stopped = false;
+
+  const connect = async () => {
+    while (!stopped) {
+      try {
+        const res = await fetch(`${baseUrl}/transfer/events`, {
+          headers: { "x-sidecar-token": token },
+          signal: ctrl.signal,
+        });
+        if (!res.body) throw new Error("no body");
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+        while (!stopped) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const parts = buf.split("\n\n");
+          buf = parts.pop() || "";
+          for (const part of parts) {
+            const line = part.split("\n").find((l) => l.startsWith("data: "));
+            if (!line) continue;
+            try {
+              onMessage(JSON.parse(line.slice(6)));
+            } catch {
+              /* ignore */
+            }
+          }
         }
+      } catch {
+        if (stopped || ctrl.signal.aborted) return;
       }
+      // sidecar 崩溃或断线后自动重连
+      await new Promise((r) => setTimeout(r, 2000));
     }
-  })().catch(() => {});
-  return () => ctrl.abort();
+  };
+
+  connect().catch(() => {});
+  return () => {
+    stopped = true;
+    ctrl.abort();
+  };
 }

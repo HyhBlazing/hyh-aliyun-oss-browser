@@ -18,6 +18,7 @@ import {
   normalizeRegion,
   putObjectMeta,
   rememberBucketRegion,
+  renameFolder,
   resolveAddressScheme,
   restoreObject,
   restoreObjects,
@@ -29,6 +30,20 @@ import {
 import { chineseErr } from "./errors.js";
 import { TransferManager } from "./transfer.js";
 import { loadSettings, saveSettings } from "./settings.js";
+import { verifyBatch, verifyLocalAgainstRemote } from "./integrity.js";
+import {
+  cancelIndexJob,
+  clearSearchIndex,
+  getIndexJob,
+  getLatestAutoIndexJob,
+  getSearchIndexStatus,
+  liveSearch,
+  listIndexJobs,
+  searchFromIndex,
+  startIndexBuild,
+  startSearchAutoIndexScheduler,
+  tickSearchAutoIndex,
+} from "./search.js";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -86,7 +101,24 @@ function requireWrite(req, reply, done) {
 const app = Fastify({ logger: false });
 
 async function main() {
-await app.register(cors, { origin: true });
+await app.register(cors, {
+  origin: true,
+  methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: [
+    "Content-Type",
+    "Accept",
+    "Authorization",
+    "X-Sidecar-Token",
+    "x-sidecar-token",
+  ],
+});
+
+app.setNotFoundHandler((req, reply) => {
+  reply.code(404).send({
+    code: 404,
+    message: `接口不存在：${req.method} ${req.url}`,
+  });
+});
 
 app.addHook("onRequest", authGuard);
 
@@ -102,6 +134,18 @@ app.post("/auth/login", async (req, reply) => {
     const result = await testLogin(body);
     state.auth = result.auth;
     state.client = result.client;
+    try {
+      transfer.onAuthReady();
+    } catch (e) {
+      console.warn("[transfer] onAuthReady failed", e?.message || e);
+    }
+    try {
+      tickSearchAutoIndex(() => ({ auth: state.auth, client: state.client }), {
+        reason: "login",
+      });
+    } catch (e) {
+      console.warn("[search] login auto index failed", e?.message || e);
+    }
     return {
       code: 0,
       message: "登录成功",
@@ -120,10 +164,22 @@ app.post("/auth/logout", async () => {
   return { code: 0, message: "已退出" };
 });
 
-app.get("/auth/session", async () => ({
-  code: 0,
-  data: state.auth ? sanitizeAuth(state.auth) : null,
-}));
+app.get("/auth/session", async () => {
+  // 应用热启动复用 sidecar 会话时不会再走 /auth/login，这里补一次登录自动索引检查
+  if (state.auth && state.client) {
+    try {
+      tickSearchAutoIndex(() => ({ auth: state.auth, client: state.client }), {
+        reason: "login",
+      });
+    } catch (e) {
+      console.warn("[search] session auto index failed", e?.message || e);
+    }
+  }
+  return {
+    code: 0,
+    data: state.auth ? sanitizeAuth(state.auth) : null,
+  };
+});
 
 app.get("/settings", async () => ({
   code: 0,
@@ -141,8 +197,39 @@ app.put("/settings", async (req, reply) => {
       reply.code(400);
       return { code: 400, message: "启用代理时请填写代理地址" };
     }
+    if (
+      body.transferHistoryRetention &&
+      !["7d", "30d", "permanent"].includes(String(body.transferHistoryRetention))
+    ) {
+      reply.code(400);
+      return { code: 400, message: "传输历史保留策略无效" };
+    }
+    if (body.searchAutoIndexTime != null) {
+      const t = String(body.searchAutoIndexTime || "").trim();
+      if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(t)) {
+        reply.code(400);
+        return { code: 400, message: "自动索引时间格式无效，请使用 HH:mm" };
+      }
+      body.searchAutoIndexTime = t;
+    }
+    if (body.searchAutoIndexStaleHours != null) {
+      const h = Number(body.searchAutoIndexStaleHours);
+      if (!Number.isFinite(h) || h < 1 || h > 720) {
+        reply.code(400);
+        return { code: 400, message: "登录自动索引过期时间需在 1～720 小时" };
+      }
+      body.searchAutoIndexStaleHours = Math.round(h);
+    }
     applyProxyOptions({}, merged);
     const next = saveSettings(body);
+    if (next.transferHistoryRetention) {
+      try {
+        const { pruneHistory } = await import("./job-store.js");
+        pruneHistory(next.transferHistoryRetention);
+      } catch {
+        /* ignore */
+      }
+    }
     // 代理等配置变更后重建客户端；失败不回滚已保存的设置
     if (state.auth) {
       try {
@@ -321,23 +408,13 @@ app.post(
         state.client,
         async (client) => {
           const from = String(fromKey);
-          if (from.endsWith("/")) {
-            const toPrefix = String(toKey).endsWith("/") ? toKey : `${toKey}/`;
-            await moveOrCopyObjects({
-              auth: state.auth,
-              serviceClient: state.client,
-              bucket,
-              keys: [from],
-              toBucket: bucket,
-              toPrefix,
-              fromPrefix: from,
-              region,
-              isCopy: false,
-            });
-            await deleteKeysIncludingFolders(client, [from]);
+          const to = String(toKey);
+          if (from.endsWith("/") || to.endsWith("/")) {
+            await renameFolder(client, from, to);
           } else {
-            await client.copy(toKey, fromKey, bucket);
-            await client.delete(fromKey);
+            if (from === to) return;
+            await client.copy(to, from);
+            await client.delete(from);
           }
         },
       );
@@ -446,6 +523,246 @@ app.get("/objects/meta", { preHandler: requireAuth }, async (req, reply) => {
     return { code: 500, message: chineseErr(err) };
   }
 });
+
+/** 本地文件与云端对象完整性对比（优先 CRC64，不用分片 ETag 当 MD5） */
+app.post("/objects/verify", { preHandler: requireAuth }, async (req, reply) => {
+  const {
+    bucket,
+    key,
+    localPath,
+    local_path,
+    region,
+    mode = "auto",
+  } = req.body || {};
+  const lp = localPath || local_path;
+  if (!bucket || !key || !lp) {
+    reply.code(400);
+    return { code: 400, message: "参数不完整" };
+  }
+  try {
+    if (region) rememberBucketRegion(bucket, region);
+    const data = await withBucketClient(
+      state.auth,
+      bucket,
+      region,
+      state.client,
+      async (client) =>
+        verifyLocalAgainstRemote(client, key, String(lp), { mode }),
+    );
+    return { code: 0, data };
+  } catch (err) {
+    reply.code(500);
+    return { code: 500, message: chineseErr(err) };
+  }
+});
+
+/**
+ * 批量校验目录/选中对象
+ * body: { bucket, keys?, prefix?, localDir, stripPrefix?, region?, mode? }
+ * 若传 prefix 且未传 keys，则列举该前缀下全部对象
+ */
+app.post(
+  "/objects/verify/batch",
+  { preHandler: requireAuth },
+  async (req, reply) => {
+    const {
+      bucket,
+      keys = [],
+      prefix = "",
+      localDir,
+      local_dir,
+      stripPrefix = "",
+      region,
+      mode = "auto",
+    } = req.body || {};
+    const dir = localDir || local_dir;
+    if (!bucket || !dir) {
+      reply.code(400);
+      return { code: 400, message: "参数不完整" };
+    }
+    try {
+      if (region) rememberBucketRegion(bucket, region);
+      const data = await withBucketClient(
+        state.auth,
+        bucket,
+        region,
+        state.client,
+        async (client) => {
+          let list = Array.isArray(keys) ? [...keys] : [];
+          if (!list.length && prefix) {
+            let token;
+            do {
+              const res = await client.listV2({
+                prefix,
+                "max-keys": 1000,
+                "continuation-token": token || undefined,
+              });
+              for (const o of res.objects || []) {
+                if (o.name && !o.name.endsWith("/")) list.push(o.name);
+              }
+              token = res.isTruncated ? res.nextContinuationToken : "";
+            } while (token);
+          }
+          if (!list.length) throw new Error("没有可校验的对象");
+          return verifyBatch(client, {
+            keys: list,
+            localDir: String(dir),
+            stripPrefix: stripPrefix || prefix || "",
+            mode,
+          });
+        },
+      );
+      return {
+        code: 0,
+        message: `校验完成：通过 ${data.summary.passed}，失败 ${data.summary.failed}，跳过 ${data.summary.skipped}`,
+        data,
+      };
+    } catch (err) {
+      reply.code(500);
+      return { code: 500, message: chineseErr(err) };
+    }
+  },
+);
+
+/** 全局搜索：mode=live 即时列举；mode=index 本地索引 */
+app.post("/objects/search", { preHandler: requireAuth }, async (req, reply) => {
+  const body = req.body || {};
+  const mode = body.mode === "index" ? "index" : "live";
+  const query = {
+    buckets: Array.isArray(body.buckets) ? body.buckets : [],
+    prefix: body.prefix || "",
+    name: body.name || body.keyword || "",
+    ext: body.ext || body.extension || "",
+    size_min: body.size_min ?? body.sizeMin,
+    size_max: body.size_max ?? body.sizeMax,
+    mtime_from: body.mtime_from ?? body.mtimeFrom,
+    mtime_to: body.mtime_to ?? body.mtimeTo,
+    storage_class: body.storage_class || body.storageClass || "",
+    limit: body.limit,
+    region: body.region || "",
+  };
+  let aborted = false;
+  const onClose = () => {
+    aborted = true;
+  };
+  req.raw.on("close", onClose);
+  try {
+    const data =
+      mode === "index"
+        ? searchFromIndex(state.auth, query)
+        : await liveSearch(state.auth, state.client, query, {
+            shouldAbort: () => aborted || req.raw.aborted || req.raw.destroyed,
+          });
+    if (aborted || req.raw.aborted) {
+      reply.code(499);
+      return { code: 499, message: "已取消" };
+    }
+    return {
+      code: 0,
+      message: data.truncated
+        ? `已返回 ${data.items.length} 条（结果已截断）`
+        : `找到 ${data.items.length} 条`,
+      data,
+    };
+  } catch (err) {
+    if (String(err?.message || "") === "已取消" || aborted || req.raw.aborted) {
+      reply.code(499);
+      return { code: 499, message: "已取消" };
+    }
+    reply.code(500);
+    return { code: 500, message: chineseErr(err) };
+  } finally {
+    req.raw.off("close", onClose);
+  }
+});
+
+app.get("/search/index/status", { preHandler: requireAuth }, async () => ({
+  code: 0,
+  data: getSearchIndexStatus(state.auth),
+}));
+
+app.get("/search/index/jobs", { preHandler: requireAuth }, async () => ({
+  code: 0,
+  data: {
+    list: listIndexJobs(),
+    latest_auto: getLatestAutoIndexJob(),
+  },
+}));
+
+app.post(
+  "/search/index/build",
+  { preHandler: requireAuth },
+  async (req, reply) => {
+    const { buckets = [], region = "", prefix = "" } = req.body || {};
+    try {
+      const data = startIndexBuild(state.auth, state.client, {
+        buckets: Array.isArray(buckets) ? buckets : [],
+        region,
+        prefix,
+      });
+      return { code: 0, message: "索引任务已启动", data };
+    } catch (err) {
+      reply.code(500);
+      return { code: 500, message: chineseErr(err) };
+    }
+  },
+);
+
+app.post(
+  "/search/index/refresh",
+  { preHandler: requireAuth },
+  async (req, reply) => {
+    const { buckets = [], region = "" } = req.body || {};
+    try {
+      const data = startIndexBuild(state.auth, state.client, {
+        buckets: Array.isArray(buckets) ? buckets : [],
+        region,
+      });
+      return { code: 0, message: "增量更新已启动", data };
+    } catch (err) {
+      reply.code(500);
+      return { code: 500, message: chineseErr(err) };
+    }
+  },
+);
+
+app.delete("/search/index", { preHandler: requireAuth }, async (req, reply) => {
+  const body = req.body || {};
+  const buckets = Array.isArray(body.buckets) ? body.buckets : null;
+  try {
+    const data = clearSearchIndex(state.auth, buckets);
+    return { code: 0, message: "本地索引已清除", data };
+  } catch (err) {
+    reply.code(500);
+    return { code: 500, message: chineseErr(err) };
+  }
+});
+
+app.get(
+  "/search/index/jobs/:id",
+  { preHandler: requireAuth },
+  async (req, reply) => {
+    const job = getIndexJob(req.params.id);
+    if (!job) {
+      reply.code(404);
+      return { code: 404, message: "任务不存在" };
+    }
+    return { code: 0, data: job };
+  },
+);
+
+app.post(
+  "/search/index/jobs/:id/cancel",
+  { preHandler: requireAuth },
+  async (req, reply) => {
+    const ok = cancelIndexJob(req.params.id);
+    if (!ok) {
+      reply.code(404);
+      return { code: 404, message: "任务不存在" };
+    }
+    return { code: 0, message: "已请求取消" };
+  },
+);
 
 app.put(
   "/objects/meta",
@@ -1082,6 +1399,32 @@ app.post("/transfer/jobs/remove", { preHandler: requireAuth }, async (req) => {
   };
 });
 
+/** 立即刷盘（应用退出前调用，无需登录态也可） */
+app.post("/transfer/persist", async () => {
+  transfer.flushToDisk();
+  return { code: 0, message: "已保存传输任务" };
+});
+
+app.get("/transfer/export", { preHandler: requireAuth }, async () => ({
+  code: 0,
+  data: transfer.exportActiveJobs(),
+}));
+
+app.post("/transfer/import", { preHandler: requireAuth }, async (req, reply) => {
+  try {
+    const data = transfer.importJobs(req.body || {});
+    return { code: 0, message: `已导入 ${data.imported} 个任务`, data };
+  } catch (err) {
+    reply.code(400);
+    return { code: 400, message: chineseErr(err) };
+  }
+});
+
+app.get("/transfer/history", { preHandler: requireAuth }, async (req) => {
+  const limit = Math.min(1000, Math.max(1, Number(req.query?.limit) || 200));
+  return { code: 0, data: { list: transfer.getHistory(limit) } };
+});
+
 app.get("/transfer/events", { preHandler: requireAuth }, async (req, reply) => {
   reply.raw.writeHead(200, {
     "Content-Type": "text/event-stream",
@@ -1133,6 +1476,29 @@ fs.writeFileSync(
   JSON.stringify({ host: HOST, port, token: TOKEN, pid: process.pid }, null, 2),
 );
 console.log(`[sidecar] listening on http://${HOST}:${port}`);
+
+startSearchAutoIndexScheduler(() =>
+  state.auth && state.client
+    ? { auth: state.auth, client: state.client }
+    : null,
+);
+
+const gracefulPersist = () => {
+  try {
+    transfer.flushToDisk();
+  } catch (e) {
+    console.warn("[sidecar] persist on exit failed", e?.message || e);
+  }
+};
+process.on("SIGINT", () => {
+  gracefulPersist();
+  process.exit(0);
+});
+process.on("SIGTERM", () => {
+  gracefulPersist();
+  process.exit(0);
+});
+process.on("beforeExit", gracefulPersist);
 }
 
 main().catch((err) => {

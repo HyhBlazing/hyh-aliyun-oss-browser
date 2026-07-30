@@ -1153,6 +1153,75 @@ export async function createFolder(client, prefix) {
   return { key };
 }
 
+/**
+ * 列举前缀下全部对象（含以 / 结尾的目录占位对象）
+ */
+async function listAllObjectKeysUnder(client, prefix) {
+  const p = normalizeFolderKey(prefix);
+  const out = [];
+  let token;
+  do {
+    const res = await client.listV2({
+      prefix: p,
+      "max-keys": 1000,
+      "continuation-token": token || undefined,
+    });
+    for (const o of res.objects || []) {
+      if (o.name) out.push(o.name);
+    }
+    token = res.isTruncated ? res.nextContinuationToken : "";
+  } while (token);
+  return [...new Set(out)];
+}
+
+/**
+ * 重命名文件夹：按前缀替换复制全部对象，全部成功后再删除旧前缀。
+ * 避免空目录丢失，以及“复制失败却仍删除源”导致文件夹消失。
+ */
+export async function renameFolder(client, fromKey, toKey) {
+  const from = normalizeFolderKey(fromKey);
+  const to = normalizeFolderKey(toKey);
+  if (from === to) return { total: 0, done: 0 };
+
+  if (to.startsWith(from)) {
+    throw new Error("不能将文件夹重命名到其自身路径下");
+  }
+  if (from.startsWith(to)) {
+    throw new Error("新文件夹名称与原路径冲突，请更换名称");
+  }
+
+  const keys = await listAllObjectKeysUnder(client, from);
+
+  // 虚拟空目录（无对象）：只建新目录占位
+  if (!keys.length) {
+    await client.put(to, Buffer.alloc(0));
+    return { total: 0, done: 0 };
+  }
+
+  // 先全部复制到新前缀；任一步失败则抛错，不删除源
+  for (const key of keys) {
+    const destKey = `${to}${key.slice(from.length)}`;
+    if (destKey === key) continue;
+    if (key.endsWith("/")) {
+      await client.put(destKey, Buffer.alloc(0));
+    } else {
+      await client.copy(destKey, key);
+    }
+  }
+
+  // 若源没有目录占位对象，补一个新目录占位，便于列表显示
+  if (!keys.includes(from)) {
+    try {
+      await client.head(to);
+    } catch {
+      await client.put(to, Buffer.alloc(0));
+    }
+  }
+
+  await deleteMultiChunked(client, keys);
+  return { total: keys.length, done: keys.length };
+}
+
 function headerVal(headers, name) {
   if (!headers) return "";
   const lower = String(name).toLowerCase();
@@ -1183,6 +1252,11 @@ export async function getObjectMeta(client, key) {
     last_modified:
       headerVal(headers, "last-modified") || head.meta?.lastModified || "",
     etag: headerVal(headers, "etag") || head.meta?.etag || "",
+    content_md5: headerVal(headers, "content-md5") || "",
+    hash_crc64ecma:
+      headerVal(headers, "x-oss-hash-crc64ecma") ||
+      headerVal(headers, "x-oss-hash-crc64") ||
+      "",
     storage_class:
       headerVal(headers, "x-oss-storage-class") ||
       head.meta?.storageClass ||

@@ -25,6 +25,29 @@ const DEFAULTS = {
    * - socks5h://127.0.0.1:1080
    */
   proxyUrl: "",
+  /**
+   * 传输历史保留：7d | 30d | permanent
+   */
+  transferHistoryRetention: "30d",
+  /**
+   * 上传/下载完成后自动做完整性校验（优先 CRC64，其次 Content-MD5）
+   * 不将分片 ETag 当作文件 MD5
+   */
+  autoVerifyIntegrity: true,
+  /** 校验失败时额外重试次数（不含首次） */
+  verifyRetryTimes: 2,
+  /** 全局搜索默认返回条数上限 */
+  searchDefaultLimit: 500,
+  /** 每天定时自动增量索引 */
+  searchAutoIndexDailyEnabled: false,
+  /** 每天执行时间，本地时区 HH:mm */
+  searchAutoIndexTime: "03:00",
+  /** 登录后若索引过期则自动增量更新 */
+  searchAutoIndexOnLogin: false,
+  /** 登录自动更新的过期阈值（小时） */
+  searchAutoIndexStaleHours: 24,
+  /** 上次自动索引日期 YYYY-MM-DD（内部去重，勿在 UI 展示为可编辑项） */
+  searchAutoIndexLastRunDate: "",
   // showImageThumbnail: client-only (localStorage hyh-oss-show-thumb), not persisted here
 };
 

@@ -72,15 +72,25 @@ export const useAuthStore = defineStore("auth", () => {
   const ready = ref(false);
   const session = ref<SessionInfo | null>(null);
   const sidecarOnline = ref(false);
+  const sidecarError = ref("");
   const credentials = ref<Credentials | null>(readRuntimeCredentials());
   let restoring = false;
 
   setRestoreAuthHandler(() => restoreSidecarSession());
 
   async function connectSidecar() {
+    sidecarError.value = "";
     // Tauri 桌面壳应自动拉起内置 / 开发 sidecar，避免依赖手动 npm run sidecar
-    const ensured = await ensureSidecarStarted();
-    const meta = ensured || (await loadSidecarMeta());
+    let meta: Awaited<ReturnType<typeof loadSidecarMeta>> = null;
+    try {
+      meta = await ensureSidecarStarted();
+    } catch (e) {
+      sidecarError.value = e instanceof Error ? e.message : String(e);
+      meta = await loadSidecarMeta();
+    }
+    if (!meta) {
+      meta = await loadSidecarMeta();
+    }
     if (meta?.port) {
       configureApi(
         `http://${meta.host || "127.0.0.1"}:${meta.port}`,
@@ -89,6 +99,7 @@ export const useAuthStore = defineStore("auth", () => {
     }
     await api.health();
     sidecarOnline.value = true;
+    sidecarError.value = "";
   }
 
   async function resolveCredentials(): Promise<Credentials | null> {
@@ -251,6 +262,7 @@ export const useAuthStore = defineStore("auth", () => {
     ready,
     session,
     sidecarOnline,
+    sidecarError,
     bootstrap,
     login,
     logout,

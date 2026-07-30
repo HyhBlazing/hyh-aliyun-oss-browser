@@ -16,6 +16,24 @@
         </a-form-item>
         <a-row :gutter="12">
           <a-col :span="12">
+            <a-form-item label="CRC64（只读）">
+              <a-input :model-value="integrity.crc64 || '—'" readonly />
+            </a-form-item>
+          </a-col>
+          <a-col :span="12">
+            <a-form-item label="Content-MD5（只读）">
+              <a-input :model-value="integrity.contentMd5 || '—'" readonly />
+            </a-form-item>
+          </a-col>
+          <a-col :span="24">
+            <a-form-item label="ETag（只读）">
+              <a-input :model-value="integrity.etag || '—'" readonly />
+              <p v-if="integrity.etagHint" class="hint muted">{{ integrity.etagHint }}</p>
+            </a-form-item>
+          </a-col>
+        </a-row>
+        <a-row :gutter="12">
+          <a-col :span="12">
             <a-form-item label="Content-Type">
               <a-input v-model="headers.contentType" allow-clear />
             </a-form-item>
@@ -88,6 +106,12 @@ const headers = reactive({
 });
 const metaItems = ref<{ key: string; value: string }[]>([]);
 const formStub = {};
+const integrity = reactive({
+  crc64: "",
+  contentMd5: "",
+  etag: "",
+  etagHint: "",
+});
 
 const objectName = computed(() => {
   const k = props.objectKey || "";
@@ -107,6 +131,12 @@ watch(
       contentDisposition: "",
       contentEncoding: "",
       expires: "",
+    });
+    Object.assign(integrity, {
+      crc64: "",
+      contentMd5: "",
+      etag: "",
+      etagHint: "",
     });
     metaItems.value = [];
     try {
@@ -132,6 +162,16 @@ watch(
         data.content_encoding ?? data.contentEncoding ?? data.ContentEncoding ?? ""
       );
       headers.expires = String(data.expires ?? data.Expires ?? "");
+      integrity.crc64 = String(
+        data.hash_crc64ecma ?? data.hashCrc64ecma ?? data.crc64 ?? ""
+      );
+      integrity.contentMd5 = String(
+        data.content_md5 ?? data.contentMd5 ?? data.ContentMD5 ?? ""
+      );
+      integrity.etag = String(data.etag ?? data.ETag ?? "").replace(/"/g, "");
+      integrity.etagHint = integrity.etag.includes("-")
+        ? "分片上传的 ETag 不能当作文件 MD5"
+        : "";
       const meta = (data.metadata ?? data.Metadata ?? {}) as Record<string, string>;
       metaItems.value = Object.entries(meta).map(([key, value]) => ({ key, value }));
       if (!metaItems.value.length) metaItems.value.push({ key: "", value: "" });
@@ -197,5 +237,13 @@ async function onOk() {
 }
 .meta-row .arco-input-wrapper {
   flex: 1;
+}
+.hint {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.muted {
+  color: var(--color-text-3);
 }
 </style>

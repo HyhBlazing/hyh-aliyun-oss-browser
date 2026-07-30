@@ -5,4 +5,8 @@ Tauri `bundle.externalBin` expects:
 
   transfer-sidecar-<rust-target-triple>[.exe]
 
+For macOS universal builds, pack both:
+  aarch64-apple-darwin and x86_64-apple-darwin
+  (set PACK_UNIVERSAL=1).
+
 Do not commit these binaries.

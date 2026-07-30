@@ -1,0 +1,17 @@
+[[permission]]
+identifier = "app-sidecar"
+description = "允许启动/查询传输 sidecar 与本地会话存储"
+commands.allow = [
+  "ensure_sidecar",
+  "get_sidecar_meta",
+  "save_session",
+  "load_session",
+  "clear_session",
+  "get_drag_icon_path",
+  "copy_paths_to_dir",
+  "paths_exist",
+  "get_app_autostart",
+  "set_app_autostart",
+  "quit_app",
+  "hide_to_tray"
+]

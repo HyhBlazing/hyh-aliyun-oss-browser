@@ -79,8 +79,13 @@ async function onOk() {
     Message.warning("名称未变更");
     return;
   }
+  const fromKey = props.isFolder
+    ? String(props.objectKey || "").endsWith("/")
+      ? props.objectKey
+      : `${props.objectKey}/`
+    : props.objectKey;
   const toKey = `${props.prefix || ""}${n}${props.isFolder ? "/" : ""}`;
-  if (toKey === props.objectKey) {
+  if (toKey === fromKey) {
     emit("update:visible", false);
     return;
   }
@@ -88,7 +93,7 @@ async function onOk() {
   try {
     await api.renameObject({
       bucket: props.bucket,
-      fromKey: props.objectKey,
+      fromKey,
       toKey,
       ...(props.region ? { region: props.region } : {}),
     });

@@ -33,11 +33,7 @@
                     <a-radio value="fixed">固定目录</a-radio>
                   </a-radio-group>
                   <div v-if="downloadMode === 'fixed'" class="path-row">
-                    <a-input
-                      v-model="downloadDir"
-                      allow-clear
-                      placeholder="请选择或填写固定下载目录"
-                    />
+                    <a-input v-model="downloadDir" allow-clear placeholder="请选择或填写固定下载目录" />
                     <a-button html-type="button" @click="pickDownloadDir">浏览</a-button>
                   </div>
                   <p v-else class="path-hint muted">每次下载时弹出目录选择，不会锁定到固定路径</p>
@@ -57,6 +53,29 @@
                 <p v-if="!autoStartSupported" class="path-hint muted">
                   当前环境不支持开机自启，请在桌面客户端中使用
                 </p>
+              </a-form-item>
+
+              <a-form-item>
+                <template #label>
+                  <span class="field-label">
+                    界面缩放
+                    <a-tooltip content="调整界面显示比例，范围 90%～125%。保存后生效并记住本机设置。">
+                      <icon-exclamation-circle class="label-tip" />
+                    </a-tooltip>
+                  </span>
+                </template>
+                <div class="zoom-row">
+                  <a-button html-type="button" class="zoom-btn" :disabled="uiZoom <= UI_ZOOM_MIN" @click="nudgeZoom(-UI_ZOOM_STEP)">
+                    −
+                  </a-button>
+                  <a-slider v-model="uiZoom" class="zoom-slider" :min="UI_ZOOM_MIN" :max="UI_ZOOM_MAX" :step="UI_ZOOM_STEP" :show-tooltip="true" @change="onZoomPreview" />
+                  <a-button html-type="button" class="zoom-btn" :disabled="uiZoom >= UI_ZOOM_MAX" @click="nudgeZoom(UI_ZOOM_STEP)">
+                    +
+                  </a-button>
+                  <a-input-number v-model="uiZoom" class="zoom-input" :min="UI_ZOOM_MIN" :max="UI_ZOOM_MAX" :step="UI_ZOOM_STEP" hide-button @change="onZoomPreview" />
+                  <span class="zoom-unit">%</span>
+                </div>
+                <p class="path-hint muted">最小 90%，最大 125%；可用 − / + 或滑块调节</p>
               </a-form-item>
 
               <a-form-item>
@@ -110,7 +129,80 @@
                   </template>
                   <a-switch v-model="form.overwriteSameName" />
                 </a-form-item>
+                <a-form-item>
+                  <template #label>
+                    <span class="field-label">
+                      传输历史保留
+                      <a-tooltip content="已完成任务写入本机历史记录。可选择保留 7 天、30 天或永久。">
+                        <icon-exclamation-circle class="label-tip" />
+                      </a-tooltip>
+                    </span>
+                  </template>
+                  <a-select v-model="form.transferHistoryRetention" :options="historyRetentionOptions" />
+                </a-form-item>
+                <a-form-item>
+                  <template #label>
+                    <span class="field-label">
+                      传输后自动完整性校验
+                      <a-tooltip content="上传/下载完成后优先用 CRC64 与云端对比；无 CRC64 时回退 Content-MD5。不会把分片 ETag 当作文件 MD5。">
+                        <icon-exclamation-circle class="label-tip" />
+                      </a-tooltip>
+                    </span>
+                  </template>
+                  <a-switch v-model="form.autoVerifyIntegrity" />
+                </a-form-item>
+                <a-form-item label="校验失败重试次数">
+                  <a-input-number v-model="form.verifyRetryTimes" :min="0" :max="10" />
+                </a-form-item>
               </div>
+            </a-form>
+          </section>
+
+          <section class="settings-section">
+            <h4 class="section-title">全局搜索</h4>
+            <a-form :model="form" layout="vertical">
+              <div class="settings-grid">
+                <a-form-item label="默认返回条数">
+                  <a-input-number v-model="form.searchDefaultLimit" :min="50" :max="5000" />
+                </a-form-item>
+                <a-form-item>
+                  <template #label>
+                    <span class="field-label">
+                      每天定时自动索引
+                      <a-tooltip content="开启后，到达设定的本地时间且当天尚未自动索引时，对全部 Bucket 执行增量更新。应用未运行会错过整点，下次启动且已过该时刻时会补跑一次。">
+                        <icon-exclamation-circle class="label-tip" />
+                      </a-tooltip>
+                    </span>
+                  </template>
+                  <a-switch v-model="form.searchAutoIndexDailyEnabled" />
+                </a-form-item>
+                <a-form-item label="每天执行时间">
+                  <a-time-picker
+                    v-model="form.searchAutoIndexTime"
+                    format="HH:mm"
+                    :disabled="!form.searchAutoIndexDailyEnabled"
+                    style="width: 100%"
+                    @change="(v: unknown) => (form.searchAutoIndexTime = normalizeAutoIndexTime(v))"
+                  />
+                </a-form-item>
+                <a-form-item>
+                  <template #label>
+                    <span class="field-label">
+                      登录后自动索引
+                      <a-tooltip content="登录成功后，若本地索引不存在或已超过过期阈值，自动执行一次增量更新。">
+                        <icon-exclamation-circle class="label-tip" />
+                      </a-tooltip>
+                    </span>
+                  </template>
+                  <a-switch v-model="form.searchAutoIndexOnLogin" />
+                </a-form-item>
+                <a-form-item label="登录自动索引过期（小时）">
+                  <a-input-number v-model="form.searchAutoIndexStaleHours" :min="1" :max="720" :disabled="!form.searchAutoIndexOnLogin" />
+                </a-form-item>
+              </div>
+              <p class="path-hint muted">
+                自动索引在已登录且传输服务运行时生效；与手动「增量更新」相同，仅维护本地元数据。
+              </p>
             </a-form>
           </section>
 
@@ -128,13 +220,7 @@
                 </template>
                 <div class="proxy-row">
                   <a-switch v-model="form.proxyEnabled" checked-text="开" unchecked-text="关" />
-                  <a-input
-                    v-if="form.proxyEnabled"
-                    v-model="form.proxyUrl"
-                    class="proxy-input"
-                    allow-clear
-                    placeholder="例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"
-                  />
+                  <a-input v-if="form.proxyEnabled" v-model="form.proxyUrl" class="proxy-input" allow-clear placeholder="例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080" />
                   <span v-else class="proxy-off muted">未启用，OSS 请求将直连</span>
                 </div>
               </a-form-item>
@@ -184,13 +270,7 @@
               <li>
                 <span class="about-k">更新</span>
                 <span class="about-v">
-                  <a-button
-                    type="text"
-                    size="small"
-                    class="update-btn"
-                    :disabled="remoteLoading"
-                    @click="openUpdatePage"
-                  >
+                  <a-button type="text" size="small" class="update-btn" :disabled="remoteLoading" @click="openUpdatePage">
                     {{ updateActionLabel }}
                   </a-button>
                 </span>
@@ -218,7 +298,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { useSettingsStore } from "../stores/settings";
 import {
@@ -235,11 +315,20 @@ import {
   type CloseStrategy,
 } from "../lib/close-strategy";
 import { getAutoStartEnabled, setAutoStartEnabled } from "../lib/autostart";
+import {
+  UI_ZOOM_MAX,
+  UI_ZOOM_MIN,
+  UI_ZOOM_STEP,
+  applyUiZoom,
+  clampUiZoomPercent,
+  getUiZoomPercent,
+  setUiZoomPercent,
+} from "../lib/ui-zoom";
 
 const LS_SHOW_THUMB = "hyh-oss-show-thumb";
 const APP_NAME = "hyh-aliyun-oss-browser";
 /** 与 apps/desktop/package.json version 保持一致 */
-const APP_VERSION = "3.0.3";
+const APP_VERSION = "3.0.4";
 const GITHUB_RELEASES_URL =
   "https://github.com/HyhBlazing/hyh-aliyun-oss-browser/releases";
 const GITHUB_LATEST_API =
@@ -257,12 +346,26 @@ const SERVER_KEYS = [
   "allowInsecureTls",
   "proxyEnabled",
   "proxyUrl",
+  "transferHistoryRetention",
+  "autoVerifyIntegrity",
+  "verifyRetryTimes",
+  "searchDefaultLimit",
+  "searchAutoIndexDailyEnabled",
+  "searchAutoIndexTime",
+  "searchAutoIndexOnLogin",
+  "searchAutoIndexStaleHours",
 ] as const;
 
 const closeStrategyOptions = [
   { label: "最小化到托盘", value: "tray" },
   { label: "退出应用", value: "exit" },
   { label: "每次询问", value: "ask" },
+];
+
+const historyRetentionOptions = [
+  { label: "保留 7 天", value: "7d" },
+  { label: "保留 30 天", value: "30d" },
+  { label: "永久保留", value: "permanent" },
 ];
 
 const emit = defineEmits<{ saved: [] }>();
@@ -274,6 +377,8 @@ const downloadMode = ref<DownloadDirMode>("ask");
 const closeStrategy = ref<CloseStrategy>("ask");
 const autoStart = ref(false);
 const autoStartSupported = ref(false);
+const uiZoom = ref(getUiZoomPercent());
+const zoomSaved = ref(false);
 const appName = APP_NAME;
 const appVersion = APP_VERSION;
 const remoteVersion = ref("");
@@ -292,6 +397,14 @@ const form = reactive({
   allowInsecureTls: false,
   proxyEnabled: false,
   proxyUrl: "",
+  transferHistoryRetention: "30d",
+  autoVerifyIntegrity: true,
+  verifyRetryTimes: 2,
+  searchDefaultLimit: 500,
+  searchAutoIndexDailyEnabled: false,
+  searchAutoIndexTime: "03:00",
+  searchAutoIndexOnLogin: false,
+  searchAutoIndexStaleHours: 24,
   showImageThumbnail: false,
 });
 
@@ -385,6 +498,8 @@ onMounted(async () => {
   downloadMode.value = getDownloadDirMode();
   downloadDir.value = getDefaultDownloadDirectory();
   closeStrategy.value = getCloseStrategy();
+  uiZoom.value = getUiZoomPercent();
+  zoomSaved.value = false;
   autoStartSupported.value = isTauri();
   if (autoStartSupported.value) {
     try {
@@ -395,6 +510,23 @@ onMounted(async () => {
   }
   void fetchRemoteVersion();
 });
+
+onUnmounted(() => {
+  // 未保存时恢复为已存储比例，避免预览残留
+  if (!zoomSaved.value) {
+    void applyUiZoom(getUiZoomPercent());
+  }
+});
+
+function onZoomPreview(value?: number | string) {
+  const next = clampUiZoomPercent(value ?? uiZoom.value);
+  uiZoom.value = next;
+  void applyUiZoom(next);
+}
+
+function nudgeZoom(delta: number) {
+  onZoomPreview(uiZoom.value + delta);
+}
 
 async function pickDownloadDir() {
   if (!isTauri()) {
@@ -425,7 +557,41 @@ function buildServerPayload() {
   payload.proxyUrl = String(form.proxyUrl || "").trim();
   payload.overwriteSameName = !!form.overwriteSameName;
   payload.allowInsecureTls = !!form.allowInsecureTls;
+  payload.searchAutoIndexDailyEnabled = !!form.searchAutoIndexDailyEnabled;
+  payload.searchAutoIndexOnLogin = !!form.searchAutoIndexOnLogin;
+  payload.searchAutoIndexTime = normalizeAutoIndexTime(form.searchAutoIndexTime);
+  payload.searchAutoIndexStaleHours = Math.max(
+    1,
+    Math.min(720, Math.round(Number(form.searchAutoIndexStaleHours) || 24))
+  );
   return payload;
+}
+
+/** 统一为 HH:mm（兼容 TimePicker 可能返回的 Dayjs） */
+function normalizeAutoIndexTime(v: unknown): string {
+  if (v == null || v === "") return "03:00";
+  if (typeof v === "string") {
+    const m = v.trim().match(/^(\d{1,2}):(\d{2})/);
+    if (m) {
+      const h = Math.min(23, Math.max(0, Number(m[1]) || 0));
+      const min = Math.min(59, Math.max(0, Number(m[2]) || 0));
+      return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+    }
+  }
+  const any = v as { format?: (f: string) => string; hour?: () => number; minute?: () => number };
+  if (typeof any.format === "function") {
+    try {
+      return normalizeAutoIndexTime(any.format("HH:mm"));
+    } catch {
+      /* fall through */
+    }
+  }
+  if (typeof any.hour === "function" && typeof any.minute === "function") {
+    const h = Math.min(23, Math.max(0, Number(any.hour()) || 0));
+    const min = Math.min(59, Math.max(0, Number(any.minute()) || 0));
+    return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+  }
+  return "03:00";
 }
 
 async function onSave() {
@@ -435,6 +601,14 @@ async function onSave() {
     const payload = buildServerPayload();
     if (payload.proxyEnabled && !payload.proxyUrl) {
       Message.warning("启用代理时请填写代理地址");
+      activeTab.value = "other";
+      return;
+    }
+    if (
+      payload.searchAutoIndexDailyEnabled &&
+      !/^([01]\d|2[0-3]):[0-5]\d$/.test(String(payload.searchAutoIndexTime || ""))
+    ) {
+      Message.warning("请设置有效的每天执行时间（HH:mm）");
       activeTab.value = "other";
       return;
     }
@@ -449,11 +623,21 @@ async function onSave() {
       setDefaultDownloadDirectory((downloadDir.value || "").trim());
     }
     setCloseStrategy(closeStrategy.value);
+    const zoom = setUiZoomPercent(uiZoom.value);
+    uiZoom.value = zoom;
+    await applyUiZoom(zoom);
+    zoomSaved.value = true;
     if (autoStartSupported.value) {
       try {
         await setAutoStartEnabled(!!autoStart.value);
       } catch (e) {
-        Message.error(e instanceof Error ? e.message : "设置开机自启失败");
+        const msg =
+          e instanceof Error && e.message
+            ? e.message
+            : typeof e === "string"
+              ? e
+              : "设置开机自启失败";
+        Message.error(msg);
         activeTab.value = "app";
         return;
       }
@@ -605,6 +789,48 @@ async function onSave() {
   font-size: 13px;
   line-height: 1.4;
   white-space: nowrap;
+}
+
+.zoom-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 420px;
+}
+
+.zoom-btn {
+  width: 32px;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.zoom-slider {
+  flex: 1 1 auto;
+  min-width: 140px;
+  width: 160px;
+}
+
+.zoom-slider :deep(.arco-slider-track)::before {
+  height: 4px;
+  background-color: #d2d2d7;
+}
+
+.zoom-slider :deep(.arco-slider-bar) {
+  height: 4px;
+  background-color: #0071e3;
+}
+
+.zoom-input {
+  width: 72px;
+  flex-shrink: 0;
+}
+
+.zoom-unit {
+  flex-shrink: 0;
+  font-size: 13px;
+  color: #6e6e73;
+  margin-left: -4px;
 }
 
 .settings-actions {
