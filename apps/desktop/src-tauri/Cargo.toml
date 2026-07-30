@@ -1,6 +1,6 @@
 [package]
 name = "hyh-oss-browser"
-version = "3.0.4"
+version = "3.0.5"
 description = "hyh-aliyun-oss-browser (Tauri)"
 authors = ["HyhBlazing"]
 license = "Apache-2.0"

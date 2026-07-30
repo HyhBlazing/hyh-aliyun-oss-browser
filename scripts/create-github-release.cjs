@@ -9,7 +9,7 @@ const https = require("https");
 
 const OWNER = "HyhBlazing";
 const REPO = "hyh-aliyun-oss-browser";
-const TAG = process.env.RELEASE_TAG || "v3.0.4";
+const TAG = process.env.RELEASE_TAG || "v3.0.5";
 const NAME = process.env.RELEASE_NAME || TAG;
 const ROOT = path.join(__dirname, "..");
 const BUNDLE_DIR = path.join(

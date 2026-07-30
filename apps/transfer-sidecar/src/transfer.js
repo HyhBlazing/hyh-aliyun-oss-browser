@@ -131,13 +131,11 @@ export class TransferManager extends EventEmitter {
       if (
         job.autoResume !== false &&
         (job.status === "stopped" || job.status === "failed") &&
-        (!job.error || /待续传|网络|超时|重试|凭证|AccessKey|token/i.test(job.error))
+        (!job.error ||
+          /待续传|网络|超时|重试|凭证|AccessKey|token/i.test(job.error))
       ) {
         // 失败且为瞬时/凭证类，或明确待续传 → 自动继续
-        if (
-          job.status === "stopped" ||
-          isLikelyAutoResumeError(job.error)
-        ) {
+        if (job.status === "stopped" || isLikelyAutoResumeError(job.error)) {
           job.aborted = false;
           job.status = "waiting";
           job.error = "";
@@ -259,12 +257,13 @@ export class TransferManager extends EventEmitter {
     const jobs = [];
     let skipped = 0;
     for (const localPath of localPaths) {
+      if (!localPath || !fs.existsSync(localPath)) continue;
       const files = walkFiles(localPath);
-      const base = fs.statSync(localPath).isDirectory()
-        ? localPath
-        : path.dirname(localPath);
+      // 目录：相对父路径，保留顶层文件夹名；文件：相对所在目录，仅保留文件名
+      const base = path.dirname(localPath);
       for (const file of files) {
         const rel = path.relative(base, file).split(path.sep).join("/");
+        if (!rel || rel.startsWith("..")) continue;
         const key = `${prefix || ""}${rel}`.replace(/^\//, "");
         const size = fs.statSync(file).size;
 
@@ -592,7 +591,9 @@ export class TransferManager extends EventEmitter {
           job.retryCount = attempt;
           job.error = `重试中 (${attempt}/${retries})：${chineseErr(err)}`;
           this.emitProgress(job);
-          await new Promise((r) => setTimeout(r, Math.min(8000, 800 * attempt)));
+          await new Promise((r) =>
+            setTimeout(r, Math.min(8000, 800 * attempt)),
+          );
           job.error = "";
         }
       }
@@ -761,7 +762,8 @@ export class TransferManager extends EventEmitter {
     } else {
       await resumableDownload(client, job, {
         concurrency: settings.downloadConcurrecyPartSize || 5,
-        partSize: Math.max(1, Number(settings.uploadPartSize) || 10) * 1024 * 1024,
+        partSize:
+          Math.max(1, Number(settings.uploadPartSize) || 10) * 1024 * 1024,
         shouldAbort: () =>
           !!(job.aborted || job.removed || !this.jobs.has(job.id)),
         progress: async (p, downloadParts) => {
@@ -844,7 +846,8 @@ export class TransferManager extends EventEmitter {
               }
               job.progress = Math.floor(p * 100);
               job.loaded = Math.floor((job.size || 0) * p);
-              if (downloadParts !== undefined) job.downloadParts = downloadParts;
+              if (downloadParts !== undefined)
+                job.downloadParts = downloadParts;
               this.emitProgress(job);
             },
           });
@@ -870,16 +873,17 @@ export class TransferManager extends EventEmitter {
     for (const row of list) {
       if (!row?.id || !row.type) continue;
       if (this.jobs.has(row.id)) continue;
-      if (row.type === "upload" && row.localPath && !fs.existsSync(row.localPath)) {
+      if (
+        row.type === "upload" &&
+        row.localPath &&
+        !fs.existsSync(row.localPath)
+      ) {
         row.error = "本地文件不存在，导入后需检查路径";
         row.status = "failed";
       }
       const job = {
         ...serializeJob(row),
-        status:
-          row.status === "finished"
-            ? "finished"
-            : "stopped",
+        status: row.status === "finished" ? "finished" : "stopped",
         aborted: false,
         removed: false,
         autoResume: false,
