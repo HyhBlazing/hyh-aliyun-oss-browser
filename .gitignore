@@ -25,3 +25,9 @@ apps/desktop/src-tauri/icons/logo-source.png
 
 # Temporary CI artifact extract for release upload
 .release-ci-tmp/
+
+# local CI debug dumps
+ci-*.zip
+ci-*.logs.bin
+ci-*-logs/
+
