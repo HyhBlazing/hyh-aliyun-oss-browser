@@ -328,7 +328,7 @@ import {
 const LS_SHOW_THUMB = "hyh-oss-show-thumb";
 const APP_NAME = "hyh-aliyun-oss-browser";
 /** 与 apps/desktop/package.json version 保持一致 */
-const APP_VERSION = "3.0.5";
+const APP_VERSION = "3.0.6";
 const GITHUB_RELEASES_URL =
   "https://github.com/HyhBlazing/hyh-aliyun-oss-browser/releases";
 const GITHUB_LATEST_API =
@@ -518,8 +518,9 @@ onUnmounted(() => {
   }
 });
 
-function onZoomPreview(value?: number | string) {
-  const next = clampUiZoomPercent(value ?? uiZoom.value);
+function onZoomPreview(value?: number | string | [number, number]) {
+  const raw = Array.isArray(value) ? value[0] : value;
+  const next = clampUiZoomPercent(raw ?? uiZoom.value);
   uiZoom.value = next;
   void applyUiZoom(next);
 }

@@ -92,12 +92,26 @@
           </a-col>
           <a-col :span="6">
             <a-form-item label="修改时间起">
-              <a-date-picker v-model="form.mtimeFrom" show-time style="width: 100%" :disabled-date="disabledFutureDate" :disabled-time="disabledFutureTime" @change="onMtimeFromChange" />
+              <a-date-picker
+                v-model="form.mtimeFrom"
+                show-time
+                style="width: 100%"
+                :disabled-date="disabledFutureDate"
+                :disabled-time="disabledFutureTime"
+                @change="onMtimeFromChange"
+              />
             </a-form-item>
           </a-col>
           <a-col :span="6">
             <a-form-item label="修改时间止">
-              <a-date-picker v-model="form.mtimeTo" show-time style="width: 100%" :disabled-date="disabledFutureDate" :disabled-time="disabledFutureTime" @change="onMtimeToChange" />
+              <a-date-picker
+                v-model="form.mtimeTo"
+                show-time
+                style="width: 100%"
+                :disabled-date="disabledFutureDate"
+                :disabled-time="disabledFutureTime"
+                @change="onMtimeToChange"
+              />
             </a-form-item>
           </a-col>
         </a-row>
@@ -107,7 +121,7 @@
         <a-button type="primary" :loading="searching" :disabled="searching" @click="onSearch">
           搜索
         </a-button>
-        <a-button v-if="searching" @click="onCancelSearch">取消搜索</a-button>
+        <a-button v-if="searching" @click="() => onCancelSearch()">取消搜索</a-button>
         <span v-if="truncated" class="warn muted">结果已截断，请收紧条件或改用索引搜索</span>
       </div>
 
@@ -383,8 +397,8 @@ function disabledFutureDate(current?: Date) {
 }
 
 /** 选中当天时，禁用当前时刻之后的时分秒 */
-function disabledFutureTime(current?: Date) {
-  const d = toDate(current ?? null);
+function disabledFutureTime(current: Date) {
+  const d = toDate(current);
   const now = new Date();
   if (!d || !isSameCalendarDay(d, now)) {
     return {};
@@ -394,9 +408,16 @@ function disabledFutureTime(current?: Date) {
   const s = now.getSeconds();
   return {
     disabledHours: () => rangeNums(h + 1, 24),
-    disabledMinutes: (hour: number) => (hour === h ? rangeNums(m + 1, 60) : []),
-    disabledSeconds: (hour: number, minute: number) =>
-      hour === h && minute === m ? rangeNums(s + 1, 60) : [],
+    // Arco 类型声明与运行时签名不一致，这里兼容两种调用方式
+    disabledMinutes: (...args: number[]) => {
+      const hour = args.length ? Number(args[0]) : h;
+      return hour === h ? rangeNums(m + 1, 60) : [];
+    },
+    disabledSeconds: (...args: number[]) => {
+      const hour = args.length ? Number(args[0]) : h;
+      const minute = args.length > 1 ? Number(args[1]) : m;
+      return hour === h && minute === m ? rangeNums(s + 1, 60) : [];
+    },
   };
 }
 
