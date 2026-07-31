@@ -1179,10 +1179,13 @@ app.get("/objects/media", { preHandler: requireAuth }, async (req, reply) => {
   }
 });
 
-app.get("/transfer/jobs", { preHandler: requireAuth }, async () => ({
-  code: 0,
-  data: { list: transfer.list() },
-}));
+app.get("/transfer/jobs", { preHandler: requireAuth }, async () => {
+  transfer.dedupeAllTransferJobs();
+  return {
+    code: 0,
+    data: { list: transfer.list() },
+  };
+});
 
 app.post(
   "/transfer/upload",

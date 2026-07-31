@@ -20,8 +20,9 @@ body,
   height: 100%;
   background: var(--color-bg);
   color: var(--color-text);
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
-    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   overflow: hidden;
 }
 
@@ -63,6 +64,27 @@ body,
 
 .arco-table-size-small .arco-table-checkbox {
   height: var(--table-row-h);
+}
+
+/* 勾选选中：整行浅色区分，不靠拖拽框选 */
+.arco-table-tr-checked > .arco-table-td {
+  background-color: rgba(0, 122, 255, 0.1) !important;
+}
+
+.arco-table-hover:not(.arco-table-dragging)
+  .arco-table-tr-checked:not(.arco-table-tr-empty):not(
+    .arco-table-tr-summary
+  ):hover
+  > .arco-table-td {
+  background-color: rgba(0, 122, 255, 0.14) !important;
+}
+
+.arco-table-hover:not(.arco-table-dragging)
+  .arco-table-tr:not(.arco-table-tr-empty):not(.arco-table-tr-summary):not(
+    .arco-table-tr-checked
+  ):hover
+  > .arco-table-td {
+  background-color: #f5f5f7;
 }
 
 .arco-spin {

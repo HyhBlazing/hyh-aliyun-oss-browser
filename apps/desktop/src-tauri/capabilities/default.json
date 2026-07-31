@@ -13,6 +13,7 @@
     "core:window:allow-show",
     "core:window:allow-set-focus",
     "core:window:allow-unminimize",
+    "core:window:allow-set-always-on-top",
     "core:webview:allow-set-webview-zoom",
     "shell:allow-open",
     "shell:allow-spawn",

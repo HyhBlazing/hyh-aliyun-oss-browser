@@ -1,15 +1,7 @@
 <template>
   <div ref="dockRef" class="dock" :class="{ open: transfer.visible }" @click.stop>
-    <div
-      v-if="transfer.visible"
-      class="panel"
-      :style="{ height: panelHeight + 'px' }"
-    >
-      <div
-        class="resize-handle"
-        title="拖拽调整高度"
-        @mousedown.prevent="onResizeStart"
-      >
+    <div v-if="transfer.visible" class="panel" :style="{ height: panelHeight + 'px' }">
+      <div class="resize-handle" title="拖拽调整高度" @mousedown.prevent="onResizeStart">
         <span class="resize-grip" />
       </div>
 
@@ -82,32 +74,33 @@
 
       <div class="panel-body">
         <a-empty v-if="!filteredJobs.length" :description="emptyText" />
-        <a-table
-          v-else
-          :columns="columns"
-          :data="filteredJobs"
-          row-key="id"
-          :pagination="false"
-          :bordered="false"
-          size="small"
-        >
+        <a-table v-else :columns="columns" :data="filteredJobs" row-key="id" :pagination="false" :bordered="false" size="small">
           <template #status="{ record }">
             <span class="status-text">{{ formatStatus(record.status) }}</span>
           </template>
           <template #progress="{ record }">
             <div class="progress-cell">
-              <a-progress :percent="toArcoPercent(record.progress)" size="small" />
-              <span v-if="record.speed > 0 && record.status === 'running'" class="speed">{{ formatSpeed(record.speed) }}</span>
+              <a-tooltip v-if="record.error" :content="record.error">
+                <span class="err-text">{{ record.error }}</span>
+              </a-tooltip>
+              <template v-else>
+                <a-progress :percent="toArcoPercent(record.progress)" size="small" />
+                <span
+                  class="speed"
+                  :class="{
+                    show: record.speed > 0 && record.status === 'running',
+                  }"
+                  >{{
+                    record.speed > 0 && record.status === "running"
+                      ? formatSpeed(record.speed)
+                      : "\u00a0"
+                  }}</span
+                >
+              </template>
             </div>
           </template>
-          <template #error="{ record }">
-            <a-tooltip v-if="record.error" :content="record.error">
-              <span class="err-text">{{ record.error }}</span>
-            </a-tooltip>
-            <span v-else class="muted">-</span>
-          </template>
           <template #actions="{ record }">
-            <a-tooltip v-if="record.status === 'running'" content="暂停">
+            <a-tooltip v-if="record.status === 'running' || record.status === 'verifying'" content="暂停">
               <button class="icon-btn" type="button" @click.stop="onPause(record.id)">
                 <icon-pause />
               </button>
@@ -155,6 +148,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { useTransferStore } from "../stores/transfer";
 import { api } from "../api/client";
+import { isTauri } from "../lib/local-fs";
 
 const LS_PANEL_HEIGHT = "hyh-oss-transfer-panel-height";
 const MIN_PANEL_HEIGHT = 220;
@@ -232,6 +226,7 @@ function onWindowResize() {
 const statusLabel: Record<string, string> = {
   waiting: "等待中",
   running: "进行中",
+  verifying: "校验中",
   stopped: "已暂停",
   failed: "失败",
   finished: "已完成",
@@ -241,6 +236,7 @@ const statusOptions = [
   { label: "全部", value: "all" },
   { label: "等待中", value: "waiting" },
   { label: "进行中", value: "running" },
+  { label: "校验中", value: "verifying" },
   { label: "已暂停", value: "stopped" },
   { label: "失败", value: "failed" },
   { label: "已完成", value: "finished" },
@@ -250,10 +246,29 @@ function onDocClick(e: MouseEvent) {
   if (!transfer.visible) return;
   const target = e.target as HTMLElement | null;
   if (target?.closest?.("[data-transfer-toggle]")) return;
+  // Select / Tooltip 等下拉挂到 body，点击选项时不应关闭传输面板
+  if (
+    target?.closest?.(
+      ".arco-trigger-popup, .arco-select-dropdown, .arco-dropdown, .arco-tooltip, .arco-picker-container"
+    )
+  ) {
+    return;
+  }
   const dock = dockRef.value;
   if (!dock) return;
   const path = e.composedPath() as EventTarget[];
   if (path.includes(dock)) return;
+  const hitPopup = path.some((node) => {
+    if (!(node instanceof HTMLElement)) return false;
+    return (
+      node.classList?.contains("arco-trigger-popup") ||
+      node.classList?.contains("arco-select-dropdown") ||
+      node.classList?.contains("arco-dropdown") ||
+      node.classList?.contains("arco-tooltip") ||
+      node.classList?.contains("arco-picker-container")
+    );
+  });
+  if (hitPopup) return;
   transfer.closePanel();
 }
 
@@ -280,8 +295,7 @@ watch(
 const columns = [
   { title: "对象", dataIndex: "key", ellipsis: true, width: 180 },
   { title: "状态", dataIndex: "status", width: 88, slotName: "status" },
-  { title: "进度", width: 140, slotName: "progress" },
-  { title: "错误", slotName: "error", ellipsis: true },
+  { title: "进度", width: 200, slotName: "progress", ellipsis: true },
   { title: "", width: 100, slotName: "actions" },
 ];
 
@@ -389,15 +403,40 @@ async function exportJobs() {
     const res = await api.exportJobs();
     const payload = res.data || { version: 1, jobs: [] };
     const text = JSON.stringify(payload, null, 2);
+    const n = Array.isArray((payload as { jobs?: unknown[] }).jobs)
+      ? (payload as { jobs: unknown[] }).jobs.length
+      : 0;
+    const defaultName = `oss-transfer-jobs-${new Date().toISOString().slice(0, 10)}.json`;
+
+    if (isTauri()) {
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      const { invoke } = await import("@tauri-apps/api/core");
+      const path = await save({
+        title: "导出传输任务",
+        defaultPath: defaultName,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!path) return;
+      await invoke("write_text_file", { path, contents: text });
+      Message.success(
+        n ? `已导出 ${n} 个任务\n${path}` : `已保存空任务列表\n${path}`
+      );
+      return;
+    }
+
+    // 浏览器环境回退：触发下载到默认下载目录
     const blob = new Blob([text], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `oss-transfer-jobs-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = defaultName;
     a.click();
     URL.revokeObjectURL(url);
-    const n = Array.isArray((payload as any).jobs) ? (payload as any).jobs.length : 0;
-    Message.success(n ? `已导出 ${n} 个任务` : "当前没有可导出的任务");
+    Message.success(
+      n
+        ? `已导出 ${n} 个任务，请到浏览器下载目录查看 ${defaultName}`
+        : `已保存空任务列表，请到浏览器下载目录查看 ${defaultName}`
+    );
   } catch (e) {
     Message.error(e instanceof Error ? e.message : "导出失败");
   }
@@ -405,18 +444,33 @@ async function exportJobs() {
 
 async function importJobs() {
   try {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = "application/json,.json";
-    const file = await new Promise<File | null>((resolve) => {
-      input.onchange = () => resolve(input.files?.[0] || null);
-      input.click();
-    });
-    if (!file) return;
-    const text = await file.text();
+    let text = "";
+    if (isTauri()) {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const { invoke } = await import("@tauri-apps/api/core");
+      const selected = await open({
+        title: "导入传输任务",
+        multiple: false,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!selected) return;
+      const path = Array.isArray(selected) ? selected[0] : selected;
+      if (!path) return;
+      text = await invoke<string>("read_text_file", { path });
+    } else {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = "application/json,.json";
+      const file = await new Promise<File | null>((resolve) => {
+        input.onchange = () => resolve(input.files?.[0] || null);
+        input.click();
+      });
+      if (!file) return;
+      text = await file.text();
+    }
     const payload = JSON.parse(text);
     const res = await api.importJobs(payload);
-    const n = Number((res.data as any)?.imported) || 0;
+    const n = Number((res.data as { imported?: number } | undefined)?.imported) || 0;
     await transfer.refresh();
     Message.success(res.message || `已导入 ${n} 个任务`);
   } catch (e) {
@@ -474,14 +528,14 @@ async function clearAll() {
   box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.05);
 }
 
-.toggle-bar > :deep(*) {
+.toggle-bar> :deep(*) {
   display: flex;
   align-items: center;
   justify-content: center;
   height: 100%;
 }
 
-.toggle-bar > :deep(* + *) {
+.toggle-bar> :deep(* + *) {
   border-left: 1px solid var(--color-border);
 }
 
@@ -581,14 +635,14 @@ async function clearAll() {
   background: #f5f5f7;
 }
 
-.type-tabs > :deep(*) {
+.type-tabs> :deep(*) {
   display: flex;
   align-items: center;
   justify-content: center;
   height: 100%;
 }
 
-.type-tabs > :deep(* + *) {
+.type-tabs> :deep(* + *) {
   border-left: 1px solid var(--color-border);
 }
 
@@ -677,24 +731,69 @@ async function clearAll() {
 }
 
 .progress-cell {
+  position: relative;
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  min-height: 34px;
+  box-sizing: border-box;
+}
+
+.progress-cell :deep(.arco-progress) {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  margin: 0;
+  line-height: 1;
+}
+
+.progress-cell :deep(.arco-progress-line) {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  padding-right: 0;
+}
+
+.progress-cell :deep(.arco-progress-line-wrapper) {
+  display: flex;
+  align-items: center;
+  margin-right: 12px;
+}
+
+.progress-cell :deep(.arco-progress-line-text) {
+  display: inline-flex;
+  align-items: center;
+  margin: 0 0 0 4px;
+  line-height: 1;
+  font-size: 12px;
 }
 
 .speed {
-  margin-top: 2px;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 14px;
+  line-height: 14px;
   font-size: 11px;
   color: #8e8e93;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.speed.show {
+  visibility: visible;
 }
 
 .err-text {
   display: inline-block;
-  max-width: 120px;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: #ff3b30;
   font-size: 12px;
+  line-height: 1.3;
+  vertical-align: middle;
 }
 
 .muted {

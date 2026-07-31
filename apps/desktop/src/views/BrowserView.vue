@@ -26,15 +26,7 @@
           <icon-refresh />
         </button>
       </a-tooltip>
-      <a-input
-        ref="addressInputRef"
-        v-model="addressInput"
-        class="addr"
-        size="small"
-        allow-clear
-        placeholder="地址栏 Ctrl+L"
-        @press-enter="browser.go(addressInput)"
-      />
+      <a-input ref="addressInputRef" v-model="addressInput" class="addr" size="small" allow-clear placeholder="地址栏 Ctrl+L" @press-enter="browser.go(addressInput)" />
       <a-tooltip content="收藏夹">
         <button class="icon-btn" type="button" @click="showFav = true">
           <icon-bookmark />
@@ -50,8 +42,8 @@
           <icon-settings />
         </button>
       </a-tooltip>
-      <a-dropdown trigger="hover" position="br" :popup-max-height="320" @popup-visible-change="onAccountMenuVisible">
-        <button class="icon-btn account-trigger" type="button" :title="currentAccountTip" @click="switchToNextAccount">
+      <a-dropdown trigger="click" position="br" :popup-max-height="320" @popup-visible-change="onAccountMenuVisible">
+        <button class="icon-btn account-trigger" type="button" :title="currentAccountTip">
           <icon-user />
         </button>
         <template #content>
@@ -176,8 +168,18 @@
               <icon-copy />
             </button>
           </a-tooltip>
-          <a-tooltip v-if="canWrite" :content="clipboard.isCopy ? '粘贴（应用内复制，Ctrl+Shift+V）' : '粘贴（应用内移动，Ctrl+Shift+V）'">
-            <button class="icon-btn" type="button" :class="{ active: clipboard.hasItems }" :disabled="!clipboard.hasItems" @click="pasteClipboard">
+          <a-tooltip content="复制到系统剪贴板（Ctrl+C，可粘贴到桌面/资源管理器）">
+            <button class="icon-btn" type="button" :disabled="!selectedKeys.length || !browser.bucket" @click="copySelectedToSystem">
+              <icon-export />
+            </button>
+          </a-tooltip>
+          <a-tooltip v-if="canWrite" :content="clipboard.hasItems
+            ? clipboard.isCopy
+              ? '粘贴：优先本地文件上传，否则桶内复制（Ctrl+V）'
+              : '粘贴：优先本地文件上传，否则桶内移动（Ctrl+V）'
+            : '粘贴：资源管理器复制的文件将上传到当前目录（Ctrl+V）'
+            ">
+            <button class="icon-btn" type="button" :disabled="!browser.bucket" @click="smartPaste">
               <icon-paste />
             </button>
           </a-tooltip>
@@ -209,19 +211,8 @@
       </div>
     </div>
 
-    <main
-      class="list"
-      @dragover.prevent="onDragOver"
-      @dragleave="onDragLeave"
-      @drop.prevent="onDrop"
-      @contextmenu="onListBlankContextMenu"
-    >
-      <div
-        v-if="dropZoneMode"
-        class="drop-overlay"
-        :class="dropZoneMode === 'ready' ? 'is-ready' : 'is-blocked'"
-        aria-live="polite"
-      >
+    <main ref="listRef" class="list" :class="{ 'is-marquee': marquee.active || marquee.tracking }" @mousedown.capture="onMarqueeMouseDown" @dragover.prevent="onDragOver" @dragleave="onDragLeave" @drop.prevent="onDrop" @contextmenu="onListBlankContextMenu">
+      <div v-if="dropZoneMode" class="drop-overlay" :class="dropZoneMode === 'ready' ? 'is-ready' : 'is-blocked'" aria-live="polite">
         <div class="drop-overlay-card">
           <icon-upload v-if="dropZoneMode === 'ready'" class="drop-overlay-icon" />
           <icon-exclamation-circle v-else class="drop-overlay-icon" />
@@ -234,7 +225,7 @@
 
         <a-empty v-if="!browser.loading && !browser.error && emptyList" :description="browser.bucket ? '暂无对象' : '暂无 Bucket'" />
 
-        <a-table v-else-if="!browser.bucket && browser.filteredBuckets.length" row-key="name" size="small" :bordered="false" :columns="bucketColumns" :data="browser.filteredBuckets" :pagination="false" :row-selection="rowSelection" v-model:selected-keys="selectedKeys" :scroll="{ y: 'calc(100vh - 96px)' }" @row-dblclick="onBucketRow" @row-contextmenu="onBucketContextMenu" @selection-change="onSelectionChange">
+        <a-table v-else-if="!browser.bucket && browser.filteredBuckets.length" row-key="name" size="small" :bordered="false" :columns="bucketColumns" :data="browser.filteredBuckets" :pagination="false" :row-selection="rowSelection" v-model:selected-keys="selectedKeys" :scroll="{ y: 'calc(100vh - 96px)' }" @row-click="onBucketRowClick" @row-dblclick="onBucketRow" @row-contextmenu="onBucketContextMenu" @selection-change="onSelectionChange">
           <template #sortName>
             <span class="col-sort" :class="{ active: browser.sortKey === 'name' }" role="button" tabindex="0" @click="toggleSort('name')" @keydown.enter.prevent="toggleSort('name')">
               名称<span class="col-sort-mark">{{ sortMark("name") }}</span>
@@ -251,7 +242,7 @@
             </span>
           </template>
           <template #name="{ record }">
-            <button class="name-cell" type="button" @click="onBucketRow(record)">
+            <button class="name-cell" type="button" :data-oss-key="record.name" @click="onBucketNameClick($event, record)">
               <icon-storage class="type-icon bucket" />
               <span>{{ record.name }}</span>
             </button>
@@ -261,7 +252,7 @@
           </template>
         </a-table>
 
-        <a-table v-else-if="browser.bucket && browser.filteredObjects.length" row-key="name" size="small" :bordered="false" :columns="objectColumns" :data="browser.filteredObjects" :pagination="false" :row-selection="rowSelection" v-model:selected-keys="selectedKeys" :scroll="{ y: 'calc(100vh - 96px)' }" @row-dblclick="onObjectDbl" @row-contextmenu="onObjectContextMenu" @selection-change="onSelectionChange">
+        <a-table v-else-if="browser.bucket && browser.filteredObjects.length" row-key="name" size="small" :bordered="false" :columns="objectColumns" :data="browser.filteredObjects" :pagination="false" :row-selection="rowSelection" v-model:selected-keys="selectedKeys" :scroll="{ y: 'calc(100vh - 96px)' }" @row-click="onObjectRowClick" @row-dblclick="onObjectDbl" @row-contextmenu="onObjectContextMenu" @selection-change="onSelectionChange">
           <template #sortName>
             <span class="col-sort" :class="{ active: browser.sortKey === 'name' }" role="button" tabindex="0" @click="toggleSort('name')" @keydown.enter.prevent="toggleSort('name')">
               名称<span class="col-sort-mark">{{ sortMark("name") }}</span>
@@ -278,19 +269,8 @@
             </span>
           </template>
           <template #name="{ record }">
-            <div
-              class="name-cell"
-              role="button"
-              tabindex="0"
-              draggable="true"
-              title="单击打开；按住拖到资源管理器可下载到该位置"
-              :class="{ archived: isArchive(record) }"
-              @click="record.isFolder ? browser.enterFolder(record) : previewItem(record)"
-              @keydown.enter.prevent="record.isFolder ? browser.enterFolder(record) : previewItem(record)"
-              @dragstart="onObjectDragStart($event, record)"
-              @dragend="onObjectDragEnd"
-            >
-              <img v-if="showThumb && !record.isFolder && isImage(record.name) && thumbMap[record.name]" :src="thumbMap[record.name]" class="type-icon thumb" alt="" />
+            <div class="name-cell" role="button" tabindex="0" :data-oss-key="record.name" :draggable="isKeySelected(record.name)" title="单击打开；空白处框选；已选中拖到文件夹（首次准备后再次拖出）" :class="{ archived: isArchive(record) }" @click="onNameCellClick($event, record)" @keydown.enter.prevent="record.isFolder ? browser.enterFolder(record) : previewItem(record)" @dragstart="onObjectDragStart($event, record)" @dragend="onObjectDragEnd">
+              <img v-if="showThumb && !record.isFolder && isImage(record.name) && thumbMap[record.name]" :src="thumbMap[record.name]" class="type-icon thumb" alt="" @error="onThumbError(record.name)" />
               <icon-folder v-else-if="record.isFolder" class="type-icon folder" />
               <icon-file-image v-else-if="isImage(record.name)" class="type-icon image" />
               <icon-video-camera v-else-if="isVideo(record.name)" class="type-icon video" />
@@ -300,13 +280,13 @@
             </div>
           </template>
           <template #size="{ record }">
-            {{ record.isFolder ? "-" : formatSize(record.size) }}
+            <span :data-oss-key="record.name">{{ record.isFolder ? "-" : formatSize(record.size) }}</span>
           </template>
           <template #storageClass="{ record }">
-            {{ record.isFolder ? "-" : formatStorageClass(record.storageClass || record.storage_class) }}
+            <span :data-oss-key="record.name">{{ record.isFolder ? "-" : formatStorageClass(record.storageClass || record.storage_class) }}</span>
           </template>
           <template #lastModified="{ record }">
-            {{ formatTime(record.lastModified) }}
+            <span :data-oss-key="record.name">{{ formatTime(record.lastModified) }}</span>
           </template>
           <template #actions="{ record }">
             <div class="row-actions" @click.stop>
@@ -343,6 +323,15 @@
     </main>
 
     <Teleport to="body">
+      <div v-if="marquee.visible" class="marquee-box" :style="{
+        left: marquee.left + 'px',
+        top: marquee.top + 'px',
+        width: marquee.width + 'px',
+        height: marquee.height + 'px',
+      }" />
+    </Teleport>
+
+    <Teleport to="body">
       <div v-if="ctxMenu.visible" class="ctx-mask" @click="closeCtxMenu" @contextmenu.prevent="closeCtxMenu">
         <div class="ctx-menu" :style="{ left: `${ctxMenu.x}px`, top: `${ctxMenu.y}px` }" @click.stop>
           <!-- Bucket -->
@@ -366,8 +355,8 @@
             <button class="ctx-item" type="button" :disabled="!canWrite" @click="onBlankCtxUpload(true)">
               <icon-upload class="ctx-ico blue" />上传文件夹
             </button>
-            <button class="ctx-item" type="button" :disabled="!canWrite || !clipboard.hasItems" @click="onBlankCtxPaste">
-              <icon-paste class="ctx-ico blue" />粘贴（桶内）
+            <button class="ctx-item" type="button" :disabled="!canWrite" @click="onBlankCtxPaste">
+              <icon-paste class="ctx-ico blue" />粘贴
             </button>
             <div class="ctx-divider" />
             <button class="ctx-item" type="button" @click="onBlankCtxRefresh">
@@ -382,6 +371,9 @@
             </button>
             <button class="ctx-item" type="button" @click="onCtxDownload">
               <icon-download class="ctx-ico blue" />下载
+            </button>
+            <button class="ctx-item" type="button" @click="onCtxCopyToSystem">
+              <icon-export class="ctx-ico blue" />复制到本地剪贴板
             </button>
             <button class="ctx-item" type="button" :disabled="!canWrite" @click="onCtxCopy">
               <icon-copy class="ctx-ico blue" />复制（桶内）
@@ -410,12 +402,7 @@
             <button class="ctx-item" type="button" @click="onCtxVerify">
               <icon-safe class="ctx-ico green" />完整性校验
             </button>
-            <button
-              class="ctx-item"
-              type="button"
-              :disabled="!canWrite || !!ctxMenu.record.isFolder"
-              @click="onCtxSymlink"
-            >
+            <button class="ctx-item" type="button" :disabled="!canWrite || !!ctxMenu.record.isFolder" @click="onCtxSymlink">
               <icon-link class="ctx-ico" />设置软链接
             </button>
             <div class="ctx-divider" />
@@ -454,15 +441,7 @@
       </a-form>
     </a-modal>
 
-    <a-modal
-      v-model:visible="openSettings"
-      title="设置"
-      :footer="false"
-      width="auto"
-      :fullscreen="false"
-      unmount-on-close
-      modal-class="settings-modal"
-    >
+    <a-modal v-model:visible="openSettings" title="设置" :footer="false" width="60vw" top="10vh" :fullscreen="false" unmount-on-close modal-class="settings-modal" :modal-style="settingsModalStyle" :body-style="settingsModalBodyStyle">
       <SettingsPanel @saved="onSettingsSaved" />
     </a-modal>
 
@@ -491,22 +470,9 @@
     <ObjectAclModal v-model:visible="aclModal.visible" :bucket="browser.bucket" :object-key="aclModal.key" :region="browser.bucketRegion" />
 
     <ObjectMetaModal v-model:visible="metaModal.visible" :bucket="browser.bucket" :object-key="metaModal.key" :region="browser.bucketRegion" />
-    <VerifyModal
-      v-model:visible="verifyModal.visible"
-      :bucket="verifyModal.bucket"
-      :region="verifyModal.region"
-      :object-key="verifyModal.objectKey"
-      :keys="verifyModal.keys"
-      :prefix="verifyModal.prefix"
-      :strip-prefix="verifyModal.stripPrefix"
-    />
+    <VerifyModal v-model:visible="verifyModal.visible" :bucket="verifyModal.bucket" :region="verifyModal.region" :object-key="verifyModal.objectKey" :keys="verifyModal.keys" :prefix="verifyModal.prefix" :strip-prefix="verifyModal.stripPrefix" />
 
-    <GlobalSearchModal
-      v-model:visible="showGlobalSearch"
-      :bucket-names="globalSearchBucketNames"
-      :default-bucket="browser.bucket"
-      @batch="onGlobalSearchBatch"
-    />
+    <GlobalSearchModal v-model:visible="showGlobalSearch" :bucket-names="globalSearchBucketNames" :default-bucket="browser.bucket" @batch="onGlobalSearchBatch" />
 
     <RestoreModal v-model:visible="restoreModal.visible" :bucket="browser.bucket" :keys="restoreModal.keys" :prefix="browser.prefix" :region="browser.bucketRegion" />
 
@@ -525,14 +491,7 @@
       <div class="preview-body" :class="{ scrollable: preview.kind === 'text', loading: preview.loading }">
         <pre v-if="preview.kind === 'text'" class="preview-text">{{ preview.text }}</pre>
         <VideoPlayer v-else-if="preview.kind === 'video' && preview.url" :url="preview.url" />
-        <AudioSpectrumPlayer
-          v-else-if="preview.kind === 'audio' && preview.key"
-          :url="preview.url"
-          :title="preview.title"
-          :bucket="browser.bucket"
-          :object-key="preview.key"
-          :region="browser.bucketRegion"
-        />
+        <AudioSpectrumPlayer v-else-if="preview.kind === 'audio' && preview.key" :url="preview.url" :title="preview.title" :bucket="browser.bucket" :object-key="preview.key" :region="browser.bucketRegion" />
         <div v-else-if="!preview.loading" class="preview-other">
           <p class="muted">该类型暂不支持内嵌预览</p>
           <a-space>
@@ -568,6 +527,10 @@ import {
   rememberDownloadDirectory,
   resolveDownloadDirectory,
 } from "../lib/local-fs";
+import {
+  readSystemClipboardFiles,
+  writeSystemClipboardFiles,
+} from "../lib/system-clipboard";
 import { startSearchAutoIndexWatch } from "../lib/search-auto-index-watch";
 import { listHistories, type AuthHistoryItem } from "../lib/tauri";
 import TransferDock from "../components/TransferDock.vue";
@@ -615,7 +578,7 @@ const currentAccountTip = computed(() => {
   const id = currentAccountId.value;
   if (!id) return "账号";
   const desc = currentAccountDesc.value;
-  const lines = ["点击切换账号；悬停可选择退出"];
+  const lines = ["点击打开账号菜单，选择后切换"];
   if (desc) lines.push(desc);
   lines.push(id);
   return lines.join("\n");
@@ -701,21 +664,34 @@ async function switchAccount(item: AuthHistoryItem) {
   }
 }
 
-async function switchToNextAccount() {
-  refreshAccountHistories();
-  const list = switchableAccounts.value;
-  if (!list.length) {
-    Message.info("暂无其他可切换账号，请先在登录页保存多个 AccessKey");
-    return;
-  }
-  await switchAccount(list[0]);
-}
-
 const addressInput = ref(browser.address);
 const addressInputRef = ref<{ focus?: () => void } | null>(null);
 const showCreate = ref(false);
 const showCreateFolder = ref(false);
 const openSettings = ref(false);
+/** 弹窗 Teleport 到 body，用内联 style 保证高度约 80vh、上下居中 */
+const settingsModalStyle = {
+  width: "60vw",
+  maxWidth: "60vw",
+  height: "80vh",
+  maxHeight: "80vh",
+  top: "10vh",
+  margin: "0 auto",
+  overflow: "hidden",
+  display: "flex",
+  flexDirection: "column" as const,
+  borderRadius: "12px",
+};
+const settingsModalBodyStyle = {
+  flex: "1",
+  minHeight: "0",
+  height: "auto",
+  maxHeight: "none",
+  overflow: "hidden",
+  padding: "12px 20px 16px",
+  display: "flex",
+  flexDirection: "column" as const,
+};
 const showFav = ref(false);
 const showGlobalSearch = ref(false);
 
@@ -766,9 +742,27 @@ const objectDrag = reactive({
   preparing: false,
 });
 let unlistenNativeDrop: null | (() => void) = null;
-let dragIconPath = "";
-let dragSession = 0;
+let unlistenNativeClipboard: null | (() => void) = null;
 const selectedKeys = ref<(string | number)[]>([]);
+const listRef = ref<HTMLElement | null>(null);
+
+/** 框选拖拽状态 */
+const marquee = reactive({
+  tracking: false,
+  active: false,
+  visible: false,
+  additive: false,
+  suppressClick: false,
+  startClientX: 0,
+  startClientY: 0,
+  left: 0,
+  top: 0,
+  width: 0,
+  height: 0,
+  baseKeys: [] as string[],
+});
+const MARQUEE_THRESHOLD = 5;
+let marqueeRaf = 0;
 
 const createForm = reactive({
   name: "",
@@ -918,10 +912,281 @@ const rowSelection = {
   width: 44,
 };
 
+/** 列表 Shift 连选锚点（按当前可见列表下标） */
+let lastSelectIndex = -1;
+
 function onSelectionChange(keys: (string | number)[]) {
   // v-model 已同步 selectedKeys；这里统一成 string 并写回 store
   selectedKeys.value = keys.map((k) => String(k));
   browser.selected = selectedKeys.value.map(String);
+  const visible = browser.bucket
+    ? browser.filteredObjects.map((o) => o.name)
+    : browser.filteredBuckets.map((b) => b.name);
+  const lastKey = selectedKeys.value.length
+    ? String(selectedKeys.value[selectedKeys.value.length - 1])
+    : "";
+  lastSelectIndex = lastKey ? visible.indexOf(lastKey) : -1;
+}
+
+function applyRowSelect(
+  key: string,
+  index: number,
+  ev: MouseEvent | undefined,
+  visibleKeys: string[]
+) {
+  const cur = new Set(selectedKeys.value.map(String));
+  const shift = !!ev?.shiftKey;
+  const meta = !!(ev?.ctrlKey || ev?.metaKey);
+
+  if (shift && lastSelectIndex >= 0 && index >= 0 && visibleKeys.length) {
+    const from = Math.min(lastSelectIndex, index);
+    const to = Math.max(lastSelectIndex, index);
+    const next = visibleKeys.slice(from, to + 1);
+    selectedKeys.value = next;
+  } else if (meta) {
+    if (cur.has(key)) cur.delete(key);
+    else cur.add(key);
+    selectedKeys.value = [...cur];
+    lastSelectIndex = index;
+  } else {
+    selectedKeys.value = [key];
+    lastSelectIndex = index;
+  }
+  browser.selected = selectedKeys.value.map(String);
+}
+
+function onObjectPropClick(record: { name: string }, ev: Event) {
+  const e = ev as MouseEvent;
+  const target = e.target as HTMLElement | null;
+  if (!target) return;
+  // 名称列打开/预览；勾选框由表格接管；操作列单独处理；框选结束后不再点选
+  if (marquee.suppressClick) return;
+  if (target.closest(".arco-checkbox, .name-cell, .row-actions, button, a, input")) return;
+  const list = browser.filteredObjects.map((o) => o.name);
+  const index = list.indexOf(record.name);
+  applyRowSelect(record.name, index, e, list);
+}
+
+function onBucketRowClick(record: { name: string }, ev: Event) {
+  const e = ev as MouseEvent;
+  const target = e.target as HTMLElement | null;
+  if (!target) return;
+  if (marquee.suppressClick) return;
+  if (target.closest(".arco-checkbox, .name-cell, button, a, input")) return;
+  const list = browser.filteredBuckets.map((b) => b.name);
+  const index = list.indexOf(record.name);
+  applyRowSelect(record.name, index, e, list);
+}
+
+function visibleRowKeys(): string[] {
+  return browser.bucket
+    ? browser.filteredObjects.map((o) => o.name)
+    : browser.filteredBuckets.map((b) => b.name);
+}
+
+function collectMarqueeHits(boxClient: {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}): string[] {
+  const root = listRef.value;
+  if (!root) return [];
+
+  const order = visibleRowKeys();
+  const orderIndex = new Map(order.map((k, i) => [k, i]));
+  const hits: string[] = [];
+  const seen = new Set<string>();
+
+  // 用名称单元格定位行；勾选固定列时取主表体行矩形
+  root.querySelectorAll("[data-oss-key]").forEach((node) => {
+    const key = node.getAttribute("data-oss-key") || "";
+    if (!key || seen.has(key) || !orderIndex.has(key)) return;
+    const row = (node.closest("tr") as HTMLElement | null) || (node as HTMLElement);
+    const r = row.getBoundingClientRect();
+    if (r.height < 2) return;
+    // 行选：竖直方向相交即可（更接近资源管理器手感）
+    if (boxClient.bottom < r.top || boxClient.top > r.bottom) return;
+    // 水平方向也要求与行有交集，避免误选
+    if (boxClient.right < r.left || boxClient.left > r.right) return;
+    seen.add(key);
+    hits.push(key);
+  });
+
+  hits.sort((a, b) => (orderIndex.get(a) ?? 0) - (orderIndex.get(b) ?? 0));
+  return hits;
+}
+
+function applyMarqueeSelection(hits: string[]) {
+  const next = marquee.additive
+    ? [...new Set([...marquee.baseKeys, ...hits])]
+    : hits.slice();
+  selectedKeys.value = next;
+  browser.selected = next;
+  if (hits.length) {
+    lastSelectIndex = visibleRowKeys().indexOf(hits[hits.length - 1]);
+  }
+}
+
+function updateMarqueeBox(clientX: number, clientY: number) {
+  const x1 = marquee.startClientX;
+  const y1 = marquee.startClientY;
+  // 使用视口坐标 + fixed，避免被表格 stacking context 盖住
+  marquee.left = Math.min(x1, clientX);
+  marquee.top = Math.min(y1, clientY);
+  marquee.width = Math.abs(clientX - x1);
+  marquee.height = Math.abs(clientY - y1);
+  marquee.visible = true;
+  applyMarqueeSelection(
+    collectMarqueeHits({
+      left: Math.min(x1, clientX),
+      top: Math.min(y1, clientY),
+      right: Math.max(x1, clientX),
+      bottom: Math.max(y1, clientY),
+    })
+  );
+}
+
+function endMarquee(didSelect: boolean) {
+  window.removeEventListener("mousemove", onMarqueeMouseMove, true);
+  window.removeEventListener("mouseup", onMarqueeMouseUp, true);
+  window.removeEventListener("blur", onMarqueeCancel);
+  if (marqueeRaf) {
+    cancelAnimationFrame(marqueeRaf);
+    marqueeRaf = 0;
+  }
+  const wasActive = marquee.active;
+  marquee.tracking = false;
+  marquee.active = false;
+  marquee.visible = false;
+  marquee.width = 0;
+  marquee.height = 0;
+  if (wasActive && didSelect) {
+    marquee.suppressClick = true;
+    window.setTimeout(() => {
+      marquee.suppressClick = false;
+    }, 50);
+  }
+}
+
+function onMarqueeCancel() {
+  endMarquee(false);
+}
+
+function onMarqueeMouseMove(e: MouseEvent) {
+  if (!marquee.tracking) return;
+  const dx = e.clientX - marquee.startClientX;
+  const dy = e.clientY - marquee.startClientY;
+  if (!marquee.active) {
+    if (Math.abs(dx) < MARQUEE_THRESHOLD && Math.abs(dy) < MARQUEE_THRESHOLD) return;
+    marquee.active = true;
+    marquee.suppressClick = true;
+    if (!marquee.additive) {
+      selectedKeys.value = [];
+      browser.selected = [];
+    }
+  }
+  e.preventDefault();
+  e.stopPropagation();
+  if (marqueeRaf) cancelAnimationFrame(marqueeRaf);
+  const x = e.clientX;
+  const y = e.clientY;
+  marqueeRaf = requestAnimationFrame(() => {
+    marqueeRaf = 0;
+    updateMarqueeBox(x, y);
+  });
+}
+
+function onMarqueeMouseUp(e: MouseEvent) {
+  if (!marquee.tracking) return;
+  if (marquee.active) {
+    updateMarqueeBox(e.clientX, e.clientY);
+    endMarquee(true);
+  } else {
+    endMarquee(false);
+  }
+}
+
+function isKeySelected(name: string) {
+  return selectedKeys.value.map(String).includes(String(name));
+}
+
+function onBucketNameClick(e: MouseEvent, record: any) {
+  if (marquee.suppressClick) {
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
+  onBucketRow(record);
+}
+
+function onNameCellClick(e: MouseEvent, record: any) {
+  if (marquee.suppressClick) {
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
+  if (record.isFolder) browser.enterFolder(record);
+  else previewItem(record);
+}
+
+/** 勾选/行内按钮/表头不启动框选 */
+function shouldIgnoreMarqueeTarget(target: HTMLElement): boolean {
+  return !!target.closest(
+    ".arco-checkbox, .row-actions, .arco-table-th, .arco-table-header, .drop-overlay, .ctx-menu, .marquee-box, a, input, textarea, button.icon-btn, button.ctx-item, .col-sort"
+  );
+}
+
+function keyFromMarqueeTarget(target: HTMLElement): string {
+  return (
+    target.closest("[data-oss-key]")?.getAttribute("data-oss-key") ||
+    target.closest("tr")?.querySelector("[data-oss-key]")?.getAttribute("data-oss-key") ||
+    ""
+  );
+}
+
+function onMarqueeMouseDown(e: MouseEvent) {
+  if (e.button !== 0) return;
+  if (marquee.tracking) return;
+  if (hasBlockingOverlay()) return;
+  const target = e.target as HTMLElement | null;
+  if (!target) return;
+  const list = listRef.value;
+  if (!list || !list.contains(target)) return;
+  if (shouldIgnoreMarqueeTarget(target)) return;
+
+  // 已选中的行留给「拖到桌面」；从空白/未选中行仍可框选
+  const hitKey = keyFromMarqueeTarget(target);
+  if (hitKey && isKeySelected(hitKey) && !e.ctrlKey && !e.metaKey) {
+    return;
+  }
+
+  // 立刻禁止原生选字
+  e.preventDefault();
+  window.getSelection()?.removeAllRanges();
+
+  marquee.tracking = true;
+  marquee.active = false;
+  marquee.visible = false;
+  marquee.additive = !!(e.ctrlKey || e.metaKey);
+  marquee.baseKeys = marquee.additive ? selectedKeys.value.map(String) : [];
+  marquee.startClientX = e.clientX;
+  marquee.startClientY = e.clientY;
+  marquee.suppressClick = false;
+
+  window.addEventListener("mousemove", onMarqueeMouseMove, true);
+  window.addEventListener("mouseup", onMarqueeMouseUp, true);
+  window.addEventListener("blur", onMarqueeCancel);
+}
+
+function bindMarqueeListeners() {
+  // 窗口级捕获：不依赖列表 DOM 是否被 HMR 换掉
+  window.removeEventListener("mousedown", onMarqueeMouseDown, true);
+  window.addEventListener("mousedown", onMarqueeMouseDown, true);
+}
+
+function unbindMarqueeListeners() {
+  window.removeEventListener("mousedown", onMarqueeMouseDown, true);
 }
 
 const emptyList = computed(() =>
@@ -946,6 +1211,7 @@ watch(
     addressInput.value = v;
     selectedKeys.value = [];
     browser.selected = [];
+    lastSelectIndex = -1;
     Object.keys(thumbMap).forEach((k) => delete thumbMap[k]);
     Object.keys(imageUrlCache).forEach((k) => delete imageUrlCache[k]);
     Object.keys(imageUrlCacheAt).forEach((k) => delete imageUrlCacheAt[k]);
@@ -970,23 +1236,37 @@ watch(
   }
 );
 
-onMounted(async () => {
+onMounted(() => {
   showThumb.value = localStorage.getItem("hyh-oss-show-thumb") === "YES";
+  // 快捷键必须尽早挂上，不能等 bootstrap / 拖放初始化（否则 Ctrl+C 会一直无响应）
+  window.addEventListener("keydown", onBrowserShortcut, true);
+  window.addEventListener("copy", onWindowCopy, true);
+  window.addEventListener("cut", onWindowCut, true);
+  window.addEventListener("paste", onWindowPaste, true);
+  void setupNativeFileClipboardListener();
+  void nextTick(() => bindMarqueeListeners());
+
   refreshAccountHistories();
   transfer.startListening();
   stopJobFinished = transfer.onJobFinished((job) => {
     onTransferJobFinished(job);
   });
   stopAutoIndexWatch = startSearchAutoIndexWatch();
-  await browser.bootstrapFromSession();
-  loadThumbs();
-  await setupNativeFileDrop();
-  window.addEventListener("keydown", onBrowserShortcut, true);
+  void (async () => {
+    await browser.bootstrapFromSession();
+    loadThumbs();
+    await setupNativeFileDrop();
+    void nextTick(() => bindMarqueeListeners());
+  })();
 });
 
 onUnmounted(() => {
+  endMarquee(false);
+  unbindMarqueeListeners();
   unlistenNativeDrop?.();
   unlistenNativeDrop = null;
+  unlistenNativeClipboard?.();
+  unlistenNativeClipboard = null;
   stopJobFinished?.();
   stopJobFinished = null;
   stopAutoIndexWatch?.();
@@ -996,6 +1276,9 @@ onUnmounted(() => {
     listRefreshTimer = 0;
   }
   window.removeEventListener("keydown", onBrowserShortcut, true);
+  window.removeEventListener("copy", onWindowCopy, true);
+  window.removeEventListener("cut", onWindowCut, true);
+  window.removeEventListener("paste", onWindowPaste, true);
 });
 
 let stopJobFinished: null | (() => void) = null;
@@ -1030,6 +1313,48 @@ function isEditableShortcutTarget(target: EventTarget | null) {
   );
 }
 
+/** 输入框内是否有文字选区（此时 Ctrl+C 应复制文字，不抢文件复制） */
+function hasInputTextSelection(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) {
+    const el = target instanceof HTMLElement ? target.closest("input, textarea") : null;
+    if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) return false;
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    return typeof start === "number" && typeof end === "number" && end > start;
+  }
+  const start = target.selectionStart;
+  const end = target.selectionEnd;
+  return typeof start === "number" && typeof end === "number" && end > start;
+}
+
+/**
+ * 文件剪贴板快捷键是否应被输入框拦截。
+ * 选中对象后点行/勾选时焦点常仍在过滤框，若一律拦截会导致 Ctrl+C 无效果。
+ */
+function shouldBlockFileClipboardShortcut(e: KeyboardEvent): boolean {
+  if (!isEditableShortcutTarget(e.target)) return false;
+  const el = e.target instanceof HTMLElement ? e.target : null;
+  // 弹层内输入始终交给文本编辑
+  if (
+    el?.closest(
+      ".arco-modal, .arco-drawer, .arco-image-preview, .arco-trigger-popup, .settings-modal, .global-search-modal, .ctx-menu"
+    )
+  ) {
+    return true;
+  }
+  // 输入框有文字选区：优先复制/剪切文字
+  if (hasInputTextSelection(e.target)) return true;
+
+  const lower = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  const isPaste = lower === "v" || e.code === "KeyV";
+  // 地址栏粘贴保留给路径文本；复制在已选对象时仍走文件复制
+  if (el?.closest(".chrome .addr")) {
+    if (isPaste) return true;
+    if (!selectedKeys.value.length) return true;
+  }
+  return false;
+}
+
 function hasBlockingOverlay() {
   if (imagePreview.visible || preview.visible) return true;
   if (ctxMenu.visible) return false; // Esc 可关，其它导航仍可用
@@ -1053,7 +1378,10 @@ function hasBlockingOverlay() {
   ) {
     return true;
   }
-  return !!document.querySelector(".arco-image-preview");
+  // Arco ImagePreview 关闭后仍挂着 .arco-image-preview（带 -hide），不能仅凭类名判断
+  return !!document.querySelector(
+    ".arco-image-preview:not(.arco-image-preview-hide)"
+  );
 }
 
 function focusAddressBar() {
@@ -1065,14 +1393,178 @@ function focusAddressBar() {
   });
 }
 
-function onBrowserShortcut(e: KeyboardEvent) {
-  if (e.defaultPrevented || e.isComposing) return;
+/** 是否应把浏览器原生 copy/cut/paste 转成文件操作 */
+function shouldHandleFileClipboardEvent(kind: "copy" | "cut" | "paste"): boolean {
+  if (hasBlockingOverlay()) return false;
+  const active = document.activeElement;
+  if (hasInputTextSelection(active)) return false;
+  if (active instanceof HTMLElement) {
+    if (
+      active.closest(
+        ".arco-modal, .arco-drawer, .arco-image-preview, .arco-trigger-popup, .settings-modal, .global-search-modal, .ctx-menu"
+      )
+    ) {
+      return false;
+    }
+    if (kind === "paste" && active.closest(".chrome .addr")) return false;
+    if (
+      kind !== "paste" &&
+      active.closest(".chrome .addr") &&
+      !selectedKeys.value.length
+    ) {
+      return false;
+    }
+  }
+  if (kind === "paste") return !!browser.bucket && canWrite.value;
+  if (kind === "cut") return !!browser.bucket && canWrite.value && selectedKeys.value.length > 0;
+  return !!browser.bucket && selectedKeys.value.length > 0;
+}
 
+async function copyActiveTextSelection() {
+  const el = document.activeElement;
+  if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) return;
+  const start = el.selectionStart ?? 0;
+  const end = el.selectionEnd ?? 0;
+  if (end <= start) return;
+  try {
+    await navigator.clipboard.writeText(el.value.slice(start, end));
+  } catch (e) {
+    console.warn("copy text selection failed", e);
+  }
+}
+
+async function pasteTextIntoActiveInput() {
+  const el = document.activeElement;
+  if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) return;
+  try {
+    const text = await navigator.clipboard.readText();
+    if (!text) return;
+    const start = el.selectionStart ?? el.value.length;
+    const end = el.selectionEnd ?? start;
+    const next = el.value.slice(0, start) + text + el.value.slice(end);
+    el.value = next;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    const caret = start + text.length;
+    el.setSelectionRange(caret, caret);
+  } catch (e) {
+    console.warn("paste text into input failed", e);
+  }
+}
+
+/**
+ * WebView2 会吞掉 Ctrl+C/V/X，Rust 侧 AcceleratorKeyPressed 转发到此事件。
+ */
+function onNativeFileClipboard(payload: { action?: string; shift?: boolean } | null) {
+  if (!payload?.action) return;
+  const action = String(payload.action);
+  const shift = !!payload.shift;
+
+  if (hasBlockingOverlay()) return;
+
+  if (action === "copy") {
+    if (shift) {
+      if (canWrite.value) copySelected();
+      return;
+    }
+    if (!shouldHandleFileClipboardEvent("copy")) {
+      void copyActiveTextSelection();
+      return;
+    }
+    void copySelectedToSystem();
+    return;
+  }
+
+  if (action === "cut") {
+    if (!shouldHandleFileClipboardEvent("cut")) {
+      // 文本剪切：复制后删除选区
+      void (async () => {
+        await copyActiveTextSelection();
+        const el = document.activeElement;
+        if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+          const start = el.selectionStart ?? 0;
+          const end = el.selectionEnd ?? 0;
+          if (end > start) {
+            el.value = el.value.slice(0, start) + el.value.slice(end);
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+            el.setSelectionRange(start, start);
+          }
+        }
+      })();
+      return;
+    }
+    if (canWrite.value) cutSelected();
+    return;
+  }
+
+  if (action === "paste") {
+    if (shift) {
+      if (canWrite.value) void pasteInAppClipboard();
+      return;
+    }
+    if (!shouldHandleFileClipboardEvent("paste")) {
+      void pasteTextIntoActiveInput();
+      return;
+    }
+    if (canWrite.value) void smartPaste();
+  }
+}
+
+async function setupNativeFileClipboardListener() {
+  if (!isTauri()) return;
+  try {
+    const { listen } = await import("@tauri-apps/api/event");
+    unlistenNativeClipboard = await listen<{ action?: string; shift?: boolean }>(
+      "native-file-clipboard",
+      (event) => {
+        onNativeFileClipboard(event.payload || null);
+      }
+    );
+  } catch (e) {
+    console.warn("native-file-clipboard listener unavailable", e);
+  }
+}
+
+function onWindowCopy(e: ClipboardEvent) {
+  if (!shouldHandleFileClipboardEvent("copy")) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  void copySelectedToSystem();
+}
+
+function onWindowCut(e: ClipboardEvent) {
+  if (!shouldHandleFileClipboardEvent("cut")) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  cutSelected();
+}
+
+function onWindowPaste(e: ClipboardEvent) {
+  if (!shouldHandleFileClipboardEvent("paste")) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  void smartPaste();
+}
+
+function onBrowserShortcut(e: KeyboardEvent) {
   const key = e.key;
   const lower = key.length === 1 ? key.toLowerCase() : key;
   const mod = e.ctrlKey || e.metaKey;
   const alt = e.altKey;
   const shift = e.shiftKey;
+  const isFileClipKey =
+    mod &&
+    !alt &&
+    (e.code === "KeyC" ||
+      e.code === "KeyX" ||
+      e.code === "KeyV" ||
+      lower === "c" ||
+      lower === "x" ||
+      lower === "v");
+
+  // 中文输入法 composing 时仍放行 Ctrl+C/X/V；其它键保持原逻辑
+  if (!isFileClipKey && (e.defaultPrevented || e.isComposing)) return;
+  if (isFileClipKey && e.defaultPrevented) return;
+
   const typing = isEditableShortcutTarget(e.target);
 
   // 聚焦地址栏：Ctrl/Cmd+L、Alt+D、F6（输入框内也可用）
@@ -1101,7 +1593,12 @@ function onBrowserShortcut(e: KeyboardEvent) {
     }
   }
 
-  if (typing || hasBlockingOverlay()) return;
+  // 文件剪贴板：选中后即使焦点在过滤框也要生效；其它快捷键仍避开输入态
+  if (isFileClipKey) {
+    if (hasBlockingOverlay() || shouldBlockFileClipboardShortcut(e)) return;
+  } else if (typing || hasBlockingOverlay()) {
+    return;
+  }
 
   // 后退：Alt+← / Backspace / BrowserBack
   if (
@@ -1149,20 +1646,37 @@ function onBrowserShortcut(e: KeyboardEvent) {
     return;
   }
 
-  // Ctrl+X / Ctrl+Shift+C：应用内剪切 / 复制（桶内移动复制）
+  // Ctrl+X：桶内剪切；Ctrl+C：复制到系统剪贴板；Ctrl+Shift+C：桶内复制
+  // 注：普通 Ctrl+C/V/X 也由 copy/cut/paste 事件兜底（WebView 有时不派发 keydown）
   if (mod && !alt && !shift && (lower === "x" || e.code === "KeyX")) {
     e.preventDefault();
+    e.stopPropagation();
     if (canWrite.value) cutSelected();
+    return;
+  }
+  if (mod && !alt && !shift && (lower === "c" || e.code === "KeyC")) {
+    e.preventDefault();
+    e.stopPropagation();
+    void copySelectedToSystem();
     return;
   }
   if (mod && !alt && shift && (lower === "c" || e.code === "KeyC")) {
     e.preventDefault();
+    e.stopPropagation();
     if (canWrite.value) copySelected();
+    return;
+  }
+  // Ctrl+V：智能粘贴（本地文件优先上传）；Ctrl+Shift+V：仅桶内粘贴
+  if (mod && !alt && !shift && (lower === "v" || e.code === "KeyV")) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (canWrite.value) void smartPaste();
     return;
   }
   if (mod && !alt && shift && (lower === "v" || e.code === "KeyV")) {
     e.preventDefault();
-    if (canWrite.value) void pasteClipboard();
+    e.stopPropagation();
+    if (canWrite.value) void pasteInAppClipboard();
   }
 }
 
@@ -1175,7 +1689,7 @@ function scheduleListRefresh() {
 }
 
 function onTransferJobFinished(job: { type: string; status: string; bucket?: string; key?: string }) {
-  if (job.status !== "finished") return;
+  if (job.status !== "finished" && job.status !== "verifying") return;
   if (job.type === "upload") {
     if (!browser.bucket || job.bucket !== browser.bucket) return;
     const key = String(job.key || "");
@@ -1368,6 +1882,7 @@ async function handleUploadPaths(paths: string[]) {
       paths,
       browser.bucketRegion
     );
+    if (result.queued <= 0 && result.skipped <= 0) return;
     if (result.queued <= 0 && result.skipped > 0) {
       Message.success(`全部跳过：${result.skipped} 个同名未变化文件`);
     } else if (result.skipped > 0) {
@@ -1404,6 +1919,11 @@ function onObjectDragStart(e: DragEvent, record: { name: string }) {
     e.preventDefault();
     return;
   }
+  // 框选进行中时不要启动拖出下载
+  if (marquee.tracking || marquee.active) {
+    e.preventDefault();
+    return;
+  }
   const key = record.name;
   const selected = selectedKeys.value.map(String);
   const keys = selected.includes(key) && selected.length ? selected : [key];
@@ -1413,20 +1933,28 @@ function onObjectDragStart(e: DragEvent, record: { name: string }) {
   e.dataTransfer?.setData("text/plain", keys.map((k) => displayName(k)).join("\n"));
   if (e.dataTransfer) e.dataTransfer.effectAllowed = "copy";
 
-  // 桌面端：先下到临时目录，再交给系统原生拖拽，松手到哪个文件夹就落到哪里
+  // 桌面端：先拖到目标文件夹松手，再识别路径并入队下载（不预先下载）
   if (isTauri()) {
     e.preventDefault();
-    void beginNativeDragOut(keys);
+    void beginDragOutToFolder(keys);
   }
 }
 
-/** 将 OSS 选中项同步下载到临时目录，返回可供系统拖拽使用的本地路径 */
-async function prepareLocalPathsForKeys(keys: string[], tempFolder: string): Promise<string[]> {
+/** 剪贴板：同步下载到临时目录，返回本地路径 */
+async function prepareLocalPathsForKeys(
+  keys: string[],
+  tempFolder: string,
+  opts?: { showPanel?: boolean }
+): Promise<string[]> {
   if (!browser.bucket || !keys.length) return [];
   const { tempDir, join } = await import("@tauri-apps/api/path");
   const { invoke } = await import("@tauri-apps/api/core");
   const base = await tempDir();
   const localDir = await join(base, tempFolder, String(Date.now()));
+  if (opts?.showPanel !== false) {
+    transfer.openPanel("download");
+  }
+  await transfer.refresh();
   const res = await api.downloadNow({
     bucket: browser.bucket,
     keys,
@@ -1434,6 +1962,7 @@ async function prepareLocalPathsForKeys(keys: string[], tempFolder: string): Pro
     ...(browser.bucketRegion ? { region: browser.bucketRegion } : {}),
     stripPrefix: browser.prefix || "",
   });
+  await transfer.refresh();
   const paths = (res.data?.paths || []).filter(Boolean);
   if (!paths.length) return [];
   const alive = await invoke<boolean>("paths_exist", { paths });
@@ -1443,128 +1972,41 @@ async function prepareLocalPathsForKeys(keys: string[], tempFolder: string): Pro
   return paths;
 }
 
-async function beginNativeDragOut(keys: string[]) {
+/**
+ * 拖出到文件夹：松手后再解析目标路径并加入下载队列。
+ * 不预先下载到临时目录。
+ */
+async function beginDragOutToFolder(keys: string[]) {
   if (!browser.bucket || !keys.length || objectDrag.preparing) return;
   objectDrag.preparing = true;
-  const session = ++dragSession;
-
-  // 下载过程中若已松开鼠标，startDrag 在 Windows 上可能误报 Dropped 且不落盘
-  let primaryDown = true;
-  const onPointerUp = () => {
-    primaryDown = false;
-  };
-  window.addEventListener("pointerup", onPointerUp, true);
-  window.addEventListener("pointercancel", onPointerUp, true);
-
-  const loadingMsg = Message.loading({
-    content: "正在准备拖拽下载，请按住鼠标不放…",
-    duration: 0,
-  });
-  const hideLoading = () => {
-    try {
-      loadingMsg?.close?.();
-    } catch {
-      /* ignore */
-    }
-  };
-
-  const cleanupPointer = () => {
-    window.removeEventListener("pointerup", onPointerUp, true);
-    window.removeEventListener("pointercancel", onPointerUp, true);
-  };
-
+  Message.info({ content: "拖到文件夹或桌面后松开，将加入下载队列", duration: 2000 });
   try {
-    const { desktopDir, basename } = await import("@tauri-apps/api/path");
     const { invoke } = await import("@tauri-apps/api/core");
-    const { getCurrentWindow } = await import("@tauri-apps/api/window");
-    const { startDrag } = await import("@crabnebula/tauri-plugin-drag");
-    const paths = await prepareLocalPathsForKeys(keys, "hyh-oss-drag");
-    if (session !== dragSession) return;
-
-    if (!paths.length) {
-      Message.warning("没有可拖拽的文件");
-      return;
-    }
-
-    async function isOverOwnWindow(cursorPos?: { x: number; y: number }) {
-      try {
-        const win = getCurrentWindow();
-        const factor = await win.scaleFactor();
-        const pos = await win.outerPosition();
-        const size = await win.outerSize();
-        const cx = Number(cursorPos?.x ?? 0) * factor;
-        const cy = Number(cursorPos?.y ?? 0) * factor;
-        return (
-          cx >= pos.x &&
-          cx <= pos.x + size.width &&
-          cy >= pos.y &&
-          cy <= pos.y + size.height
-        );
-      } catch {
-        return false;
-      }
-    }
-
-    async function saveToDesktop() {
-      const desktop = await desktopDir();
-      const saved = await invoke<string[]>("copy_paths_to_dir", {
-        paths,
-        destDir: desktop,
-      });
-      const names = await Promise.all(saved.map((p) => basename(p)));
-      Message.success(`已保存到桌面：${names.slice(0, 3).join("、")}${names.length > 3 ? " 等" : ""}`);
-    }
-
-    hideLoading();
-
-    // 准备完成前已松手：不能再走系统拖拽（易误报成功），改为落到桌面
-    if (!primaryDown) {
-      try {
-        await saveToDesktop();
-      } catch (e) {
-        Message.warning(
-          e instanceof Error
-            ? `拖拽已中断，保存到桌面失败：${e.message}`
-            : "拖拽已中断，请重新按住拖到目标文件夹，或使用下载按钮"
-        );
-      }
-      return;
-    }
-
-    if (!dragIconPath) {
-      try {
-        dragIconPath = await invoke<string>("get_drag_icon_path");
-      } catch {
-        dragIconPath = paths[0];
-      }
-    }
-
-    await startDrag(
-      {
-        item: paths,
-        icon: dragIconPath || paths[0],
-        mode: "copy",
-      },
-      (payload) => {
-        void (async () => {
-          if (payload.result === "Cancelled") {
-            Message.info("已取消拖放。大文件建议使用下载按钮选择目录");
-            return;
-          }
-          if (payload.result !== "Dropped") return;
-          if (await isOverOwnWindow(payload.cursorPos as { x: number; y: number })) {
-            Message.info("请拖到窗口外的文件夹或桌面后再松开");
-            return;
-          }
-          Message.success("已放到目标文件夹");
-        })();
-      }
+    const dir = await invoke<string>("await_drop_folder_path");
+    if (!dir) return;
+    rememberDownloadDirectory(dir);
+    const result = await transfer.download(
+      browser.bucket,
+      keys,
+      dir,
+      browser.bucketRegion,
+      browser.prefix || ""
     );
+    if (result.queued > 0) {
+      Message.success(`已加入下载队列 ${result.queued} 个 → ${dir}`);
+    }
   } catch (err) {
-    Message.error(err instanceof Error ? err.message : "拖拽下载失败");
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("CANCELLED")) {
+      Message.info("请拖到窗口外的文件夹或桌面后再松开");
+    } else if (msg.includes("UNRECOGNIZED")) {
+      Message.warning(
+        "未识别到目标文件夹。请先打开资源管理器并进入目标目录，再拖到该窗口或桌面松开"
+      );
+    } else {
+      Message.error(msg || "拖拽下载失败");
+    }
   } finally {
-    cleanupPointer();
-    hideLoading();
     objectDrag.preparing = false;
     objectDrag.active = false;
     objectDrag.keys = [];
@@ -1572,8 +2014,6 @@ async function beginNativeDragOut(keys: string[]) {
 }
 
 function onObjectDragEnd() {
-  // Tauri 原生拖出在 beginNativeDragOut 中处理；浏览器模式不支持落到任意文件夹
-  if (isTauri()) return;
   objectDrag.active = false;
   objectDrag.keys = [];
 }
@@ -1709,6 +2149,7 @@ function onObjectContextMenu(record: any, ev: MouseEvent) {
   // 右键时同步选中该项，便于后续批量感操作
   selectedKeys.value = [record.name];
   browser.selected = [record.name];
+  lastSelectIndex = browser.filteredObjects.findIndex((o) => o.name === record.name);
   openCtxAt(ev, "object", record);
 }
 
@@ -1727,7 +2168,7 @@ function onBlankCtxUpload(asFolder: boolean) {
 function onBlankCtxPaste() {
   closeCtxMenu();
   if (!canWrite.value) return;
-  void pasteClipboard();
+  void smartPaste();
 }
 
 async function onBlankCtxRefresh() {
@@ -1757,6 +2198,16 @@ function onCtxDownload() {
   const rec = ctxMenu.record;
   closeCtxMenu();
   if (rec) downloadOne(rec);
+}
+
+function onCtxCopyToSystem() {
+  const rec = ctxMenu.record;
+  closeCtxMenu();
+  if (!rec) return;
+  const key = String(rec.name || "");
+  const selected = selectedKeys.value.map(String);
+  const keys = selected.includes(key) && selected.length ? selected : [key];
+  void copyKeysToSystem(keys);
 }
 
 function onCtxCopy() {
@@ -2038,14 +2489,14 @@ async function onGlobalSearchBatch(
       let queued = 0;
       for (const [bucket, list] of groupSearchHitsByBucket(items)) {
         const region = browser.resolveRegionFor(bucket) || undefined;
-        await transfer.download(
+        const result = await transfer.download(
           bucket,
           list.map((i) => i.key),
           dir,
           region,
           ""
         );
-        queued += list.length;
+        queued += result.queued;
       }
       Message.success(`已加入下载队列 ${queued} 个 → ${dir}`);
     } catch (e) {
@@ -2181,6 +2632,7 @@ async function pickUpload(asFolder = false) {
       paths as string[],
       browser.bucketRegion
     );
+    if (result.queued <= 0 && result.skipped <= 0) return;
     if (result.queued <= 0 && result.skipped > 0) {
       Message.success(`全部跳过：${result.skipped} 个同名未变化文件`);
     } else if (result.skipped > 0) {
@@ -2193,27 +2645,35 @@ async function pickUpload(asFolder = false) {
   }
 }
 
+let downloadBusy = false;
+
 async function startDownload(keys: string[], opts?: { chooseDir?: boolean }) {
   if (!keys.length) {
     Message.warning("请先选择要下载的对象");
     return;
   }
+  if (downloadBusy) return;
+  downloadBusy = true;
   try {
     const dir = await resolveDownloadDirectory(askLocalPath, {
       preferPrompt: !!opts?.chooseDir,
     });
     if (!dir) return;
     rememberDownloadDirectory(dir);
-    await transfer.download(
+    const result = await transfer.download(
       browser.bucket,
       keys,
       dir,
       browser.bucketRegion,
       browser.prefix || ""
     );
-    Message.success(`已加入下载队列 → ${dir}`);
+    if (result.queued > 0) {
+      Message.success(`已加入下载队列 ${result.queued} 个 → ${dir}`);
+    }
   } catch (e) {
     Message.error(e instanceof Error ? e.message : "下载失败");
+  } finally {
+    downloadBusy = false;
   }
 }
 
@@ -2241,7 +2701,7 @@ function cutSelected() {
     return;
   }
   clipboard.cut(clipboardPayload(keys));
-  Message.success(`已剪切 ${keys.length} 项，请切换目录后粘贴`);
+  Message.success(`已剪切 ${keys.length} 项，请切换目录后粘贴（Ctrl+Shift+V）`);
 }
 
 function copySelected() {
@@ -2251,23 +2711,90 @@ function copySelected() {
     return;
   }
   clipboard.copy(clipboardPayload(keys));
-  Message.success(`已复制 ${keys.length} 项，请切换目录后粘贴`);
+  Message.success(`已复制 ${keys.length} 项到应用内，请切换目录后 Ctrl+Shift+V 粘贴`);
+}
+
+function copySelectedToSystem() {
+  void copyKeysToSystem(selectedKeys.value.map(String));
+}
+
+let copyToSystemBusy = false;
+
+async function copyKeysToSystem(keys: string[]) {
+  if (!keys.length) {
+    Message.warning("请先选择对象");
+    return;
+  }
+  if (!browser.bucket) {
+    Message.warning("请先进入 Bucket");
+    return;
+  }
+  if (!isTauri()) {
+    Message.warning("复制到系统剪贴板需在桌面客户端中使用");
+    return;
+  }
+  if (copyToSystemBusy) return;
+  copyToSystemBusy = true;
+  const loadingMsg = Message.loading({ content: "正在下载到剪贴板，进度见传输列表…", duration: 0 });
+  try {
+    const paths = await prepareLocalPathsForKeys(keys, "hyh-oss-clipboard", { showPanel: true });
+    if (!paths.length) throw new Error("没有可复制的文件");
+    await writeSystemClipboardFiles(paths);
+    Message.success(`已复制 ${paths.length} 项到系统剪贴板，可在桌面或资源管理器中粘贴`);
+  } catch (e) {
+    Message.error(e instanceof Error ? e.message : "复制到系统剪贴板失败");
+  } finally {
+    try {
+      loadingMsg?.close?.();
+    } catch {
+      /* ignore */
+    }
+    copyToSystemBusy = false;
+  }
 }
 
 function cutOne(record: any) {
   clipboard.cut(clipboardPayload([record.name]));
-  Message.success("已剪切，请切换目录后粘贴");
+  Message.success("已剪切，请切换目录后 Ctrl+Shift+V 粘贴");
 }
 
 function copyOne(record: any) {
   clipboard.copy(clipboardPayload([record.name]));
-  Message.success("已复制，请切换目录后粘贴");
+  Message.success("已复制到应用内，请切换目录后 Ctrl+Shift+V 粘贴");
 }
 
-async function pasteClipboard() {
+/** 智能粘贴：优先系统剪贴板本地文件上传，否则桶内移动/复制 */
+async function smartPaste() {
+  if (!canWrite.value) {
+    Message.warning("当前为只读权限");
+    return;
+  }
+  if (!browser.bucket) {
+    Message.warning("请先进入目标 Bucket");
+    return;
+  }
+  if (isTauri()) {
+    try {
+      const paths = await readSystemClipboardFiles();
+      if (paths.length) {
+        await handleUploadPaths(paths);
+        return;
+      }
+    } catch (e) {
+      console.warn("read system clipboard failed", e);
+    }
+  }
+  await pasteInAppClipboard();
+}
+
+async function pasteInAppClipboard() {
   const clip = clipboard.item;
   if (!clip?.keys.length) {
-    Message.warning("剪切板为空");
+    Message.warning(
+      isTauri()
+        ? "剪切板中没有可粘贴内容（可先在资源管理器复制文件，或在应用内复制对象）"
+        : "应用内剪切板为空"
+    );
     return;
   }
   if (!browser.bucket) {
@@ -2487,6 +3014,13 @@ async function loadThumbs() {
       /* ignore */
     }
   }
+}
+
+function onThumbError(key: string) {
+  if (!key) return;
+  delete thumbMap[key];
+  delete imageUrlCache[key];
+  delete imageUrlCacheAt[key];
 }
 
 async function copyText(text: string) {
@@ -2712,6 +3246,50 @@ async function onLogout() {
   min-height: 0;
   overflow: hidden;
   background: #fff;
+  /* 永久禁止列表文字选中，否则拖拽会变成蓝底选字而不是框选 */
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
+.list :deep(.arco-table),
+.list :deep(.arco-table-td),
+.list :deep(.arco-table-cell),
+.list :deep(.name-cell),
+.list :deep(.name-cell *) {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
+/* 未选中时禁止原生拖图；已选中名称列可拖到桌面 */
+.list :deep(.name-cell:not([draggable="true"])),
+.list :deep(.name-cell:not([draggable="true"]) *) {
+  -webkit-user-drag: none;
+}
+
+.list.is-marquee {
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.list.is-marquee :deep(.arco-table-td),
+.list.is-marquee :deep(.name-cell) {
+  cursor: crosshair;
+}
+
+.marquee-box {
+  position: fixed;
+  z-index: 10000;
+  box-sizing: border-box;
+  border: 1px solid rgba(0, 122, 255, 0.75);
+  background: rgba(0, 122, 255, 0.16);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.list :deep(.type-icon),
+.list :deep(.name-cell img),
+.list :deep(.name-cell svg) {
+  pointer-events: none;
 }
 
 /* 右侧操作列避开纵向滚动条，避免删除按钮被遮挡 */
@@ -2851,13 +3429,13 @@ async function onLogout() {
   border: 0;
   background: transparent;
   color: inherit;
-  cursor: grab;
+  cursor: pointer;
   text-align: left;
   font: inherit;
   outline: none;
 }
 
-.name-cell:active {
+.name-cell[draggable="true"]:active {
   cursor: grabbing;
 }
 
@@ -3111,21 +3689,6 @@ async function onLogout() {
   background: #ebebef;
 }
 
-:deep(.settings-modal .arco-modal) {
-  width: min(1190px, 92vw) !important;
-  min-width: min(500px, 96vw) !important;
-  max-width: min(1190px, 92vw) !important;
-  border-radius: 12px;
-  overflow: hidden;
-}
-
-:deep(.settings-modal .arco-modal-body) {
-  height: min(720px, calc(100vh - 120px));
-  max-height: min(720px, calc(100vh - 120px));
-  overflow: hidden;
-  padding: 12px 20px 16px;
-}
-
 .delete-confirm-tip {
   margin: 0 0 8px;
   color: #3a3a3c;
@@ -3145,5 +3708,44 @@ async function onLogout() {
 
 .delete-confirm-item+.delete-confirm-item {
   margin-top: 2px;
+}
+</style>
+
+<style>
+/* Modal 挂到 body，需非 scoped 才能命中 */
+.arco-modal-wrapper:has(.arco-modal.settings-modal) {
+  overflow: hidden !important;
+}
+
+.arco-modal.settings-modal {
+  width: 60vw !important;
+  max-width: 60vw !important;
+  height: 80vh !important;
+  max-height: 80vh !important;
+  top: 10vh !important;
+  margin: 0 auto !important;
+  overflow: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+  border-radius: 12px;
+  box-sizing: border-box;
+}
+
+.arco-modal.settings-modal .arco-modal-header {
+  flex-shrink: 0;
+}
+
+.arco-modal.settings-modal .arco-modal-body {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.arco-modal.settings-modal .arco-modal-body>* {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }
 </style>

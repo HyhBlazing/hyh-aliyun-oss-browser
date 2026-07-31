@@ -61,12 +61,29 @@ export class TransferManager extends EventEmitter {
     this.runningMove = 0;
     this._networkTimer = null;
     this._restored = false;
+    /** 按类型串行化入队，避免并发请求把同一批对象建两份任务 */
+    this._enqueueChains = {
+      upload: Promise.resolve(),
+      download: Promise.resolve(),
+      move: Promise.resolve(),
+    };
     this.restoreFromDisk();
     this.startNetworkWatcher();
   }
 
   accountId() {
     return String(this.getState()?.auth?.id || "");
+  }
+
+  /** 串行执行入队，同类型互斥 */
+  _withEnqueueLock(kind, fn) {
+    const chain = this._enqueueChains[kind] || Promise.resolve();
+    const next = chain.then(fn, fn);
+    this._enqueueChains[kind] = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
   }
 
   list() {
@@ -115,6 +132,7 @@ export class TransferManager extends EventEmitter {
       };
       this.jobs.set(job.id, job);
     }
+    this.dedupeAllTransferJobs();
     if (rows.length) {
       this.emit("snapshot", { list: this.list() });
     }
@@ -125,7 +143,13 @@ export class TransferManager extends EventEmitter {
     const aid = this.accountId();
     let changed = false;
     for (const job of this.jobs.values()) {
-      if (job.status === "finished" || job.status === "running") continue;
+      if (
+        job.status === "finished" ||
+        job.status === "running" ||
+        job.status === "verifying"
+      ) {
+        continue;
+      }
       if (job.accountId && aid && job.accountId !== aid) continue;
       if (!job.accountId && aid) job.accountId = aid;
       if (
@@ -196,7 +220,7 @@ export class TransferManager extends EventEmitter {
 
   resume(id) {
     const job = this.jobs.get(id);
-    if (!job || job.status === "finished") return;
+    if (!job || job.status === "finished" || job.status === "verifying") return;
     job.aborted = false;
     job.autoResume = true;
     job.status = "waiting";
@@ -218,6 +242,70 @@ export class TransferManager extends EventEmitter {
     return true;
   }
 
+  /** 移除同 type+bucket+key 的旧任务 */
+  removeJobsForObjectKey(type, bucket, key) {
+    const ids = [];
+    for (const job of [...this.jobs.values()]) {
+      if (job.type !== type) continue;
+      if (job.bucket !== bucket || job.key !== key) continue;
+      if (this.remove(job.id)) ids.push(job.id);
+    }
+    return ids;
+  }
+
+  removeUploadJobsForKey(bucket, key) {
+    return this.removeJobsForObjectKey("upload", bucket, key);
+  }
+
+  removeDownloadJobsForKey(bucket, key) {
+    return this.removeJobsForObjectKey("download", bucket, key);
+  }
+
+  /** 同 type+bucket 下同 key 只保留最新一条 */
+  dedupeJobsByObjectKey(type, bucket) {
+    const best = new Map();
+    for (const job of [...this.jobs.values()]) {
+      if (job.type !== type || job.bucket !== bucket) continue;
+      const key = String(job.key || "");
+      const prev = best.get(key);
+      if (!prev) {
+        best.set(key, job);
+        continue;
+      }
+      const newer =
+        Number(job.createdAt || 0) >= Number(prev.createdAt || 0) ? job : prev;
+      const older = newer === job ? prev : job;
+      this.remove(older.id);
+      best.set(key, newer);
+    }
+  }
+
+  dedupeUploadJobsByKey(bucket) {
+    this.dedupeJobsByObjectKey("upload", bucket);
+  }
+
+  dedupeDownloadJobsByKey(bucket) {
+    this.dedupeJobsByObjectKey("download", bucket);
+  }
+
+  /** 清理重复的上传/下载任务 */
+  dedupeAllTransferJobs() {
+    const uploadBuckets = new Set();
+    const downloadBuckets = new Set();
+    for (const job of this.jobs.values()) {
+      if (!job.bucket) continue;
+      if (job.type === "upload") uploadBuckets.add(job.bucket);
+      if (job.type === "download") downloadBuckets.add(job.bucket);
+    }
+    for (const bucket of uploadBuckets) this.dedupeUploadJobsByKey(bucket);
+    for (const bucket of downloadBuckets) this.dedupeDownloadJobsByKey(bucket);
+  }
+
+  /** @deprecated 兼容旧调用 */
+  dedupeAllUploadJobs() {
+    this.dedupeAllTransferJobs();
+  }
+
   /** type: upload|download|move|all；onlyFinished 仅清已完成；move 含 copy */
   clear({ type = "all", onlyFinished = false } = {}) {
     const ids = [];
@@ -231,7 +319,7 @@ export class TransferManager extends EventEmitter {
       if (this.remove(job.id)) ids.push(job.id);
     }
     this.emit("snapshot", { list: this.list() });
-    this.persistSoon();
+    flushPersist(() => this.jobs.values());
     return ids;
   }
 
@@ -242,64 +330,95 @@ export class TransferManager extends EventEmitter {
     region,
     overwriteSameName,
   }) {
-    const settings = loadSettings();
-    const overwrite =
-      typeof overwriteSameName === "boolean"
-        ? overwriteSameName
-        : settings.overwriteSameName !== false;
-    const r = region || getCachedBucketRegion(bucket);
-    const { auth, client: serviceClient } = this.getState();
-    if (!auth) throw new Error("请先登录");
-    const client = overwrite
-      ? null
-      : await createBucketClient(auth, bucket, r, serviceClient);
+    const run = async () => {
+      const settings = loadSettings();
+      const overwrite =
+        typeof overwriteSameName === "boolean"
+          ? overwriteSameName
+          : settings.overwriteSameName !== false;
+      const r = region || getCachedBucketRegion(bucket);
+      const { auth, client: serviceClient } = this.getState();
+      if (!auth) throw new Error("请先登录");
+      const client = overwrite
+        ? null
+        : await createBucketClient(auth, bucket, r, serviceClient);
 
-    const jobs = [];
-    let skipped = 0;
-    for (const localPath of localPaths) {
-      if (!localPath || !fs.existsSync(localPath)) continue;
-      const files = walkFiles(localPath);
-      // 目录：相对父路径，保留顶层文件夹名；文件：相对所在目录，仅保留文件名
-      const base = path.dirname(localPath);
-      for (const file of files) {
-        const rel = path.relative(base, file).split(path.sep).join("/");
-        if (!rel || rel.startsWith("..")) continue;
-        const key = `${prefix || ""}${rel}`.replace(/^\//, "");
-        const size = fs.statSync(file).size;
-
-        if (!overwrite && client) {
-          try {
-            const head = await client.head(key);
-            const remoteSize = Number(
-              head.res?.headers?.["content-length"] ?? head.size ?? NaN,
-            );
-            if (Number.isFinite(remoteSize) && remoteSize === size) {
-              skipped += 1;
-              continue;
-            }
-          } catch (err) {
-            if (!isNotFoundErr(err)) throw err;
-          }
-        }
-
-        const job = this.createJob({
-          type: "upload",
-          bucket,
-          region: r,
-          key,
-          localPath: file,
-          size,
-          fileFingerprint: fileFingerprint(file),
-        });
-        jobs.push(job);
+      // 归一化并去重路径，避免选择器/拖放传入重复项
+      const uniquePaths = [];
+      const seenRoots = new Set();
+      for (const localPath of localPaths || []) {
+        if (!localPath) continue;
+        const absRoot = path.resolve(String(localPath));
+        const rootKey =
+          process.platform === "win32" ? absRoot.toLowerCase() : absRoot;
+        if (seenRoots.has(rootKey)) continue;
+        if (!fs.existsSync(absRoot)) continue;
+        seenRoots.add(rootKey);
+        uniquePaths.push(absRoot);
       }
-    }
-    if (!jobs.length && !skipped) {
-      throw new Error("没有可上传的文件");
-    }
-    this.persistSoon();
-    this.pump();
-    return { jobs, skipped };
+      const seenLocal = new Set();
+      const seenKeys = new Set();
+      const jobs = [];
+      let skipped = 0;
+
+      for (const localPath of uniquePaths) {
+        const files = walkFiles(localPath);
+        // 目录：相对父路径，保留顶层文件夹名；文件：相对所在目录，仅保留文件名
+        const base = path.dirname(localPath);
+        for (const file of files) {
+          const abs = path.resolve(file);
+          const absKey = process.platform === "win32" ? abs.toLowerCase() : abs;
+          if (seenLocal.has(absKey)) continue;
+          const rel = path.relative(base, file).split(path.sep).join("/");
+          if (!rel || rel.startsWith("..")) continue;
+          const key = `${prefix || ""}${rel}`.replace(/^\//, "");
+          if (seenKeys.has(key)) continue;
+          const size = fs.statSync(file).size;
+
+          if (!overwrite && client) {
+            try {
+              const head = await client.head(key);
+              const remoteSize = Number(
+                head.res?.headers?.["content-length"] ?? head.size ?? NaN,
+              );
+              if (Number.isFinite(remoteSize) && remoteSize === size) {
+                skipped += 1;
+                seenLocal.add(absKey);
+                seenKeys.add(key);
+                continue;
+              }
+            } catch (err) {
+              if (!isNotFoundErr(err)) throw err;
+            }
+          }
+
+          seenLocal.add(absKey);
+          seenKeys.add(key);
+          this.removeUploadJobsForKey(bucket, key);
+          const job = this.createJob({
+            type: "upload",
+            bucket,
+            region: r,
+            key,
+            localPath: file,
+            size,
+            fileFingerprint: fileFingerprint(file),
+          });
+          jobs.push(job);
+        }
+      }
+      // 并发兜底：同 key 只留一条
+      this.dedupeUploadJobsByKey(bucket);
+      const uniqueJobs = jobs.filter((j) => this.jobs.has(j.id));
+      if (!uniqueJobs.length && !skipped) {
+        throw new Error("没有可上传的文件");
+      }
+      this.persistSoon();
+      this.pump();
+      return { jobs: uniqueJobs, skipped };
+    };
+
+    return this._withEnqueueLock("upload", run);
   }
 
   async enqueueMoveCopy({
@@ -312,82 +431,71 @@ export class TransferManager extends EventEmitter {
     toRegion,
     isCopy = false,
   }) {
-    if (!bucket || !keys.length) throw new Error("参数不完整");
-    const destBucket = toBucket || bucket;
-    const type = isCopy ? "copy" : "move";
-    const action = isCopy ? "复制" : "移动";
-    const label = keys.length === 1 ? String(keys[0]) : `${keys.length} 项`;
-    const destLabel = `oss://${destBucket}/${toPrefix || ""}`;
-    const job = this.createJob({
-      type,
-      bucket,
-      region: region || getCachedBucketRegion(bucket),
-      key: `${action} ${label} → ${destLabel}`,
-      localPath: "",
-      size: 0,
-      moveParams: {
+    return this._withEnqueueLock("move", async () => {
+      const uniqKeys = [
+        ...new Set(
+          (keys || []).map((k) => String(k || "").trim()).filter(Boolean),
+        ),
+      ];
+      if (!bucket || !uniqKeys.length) throw new Error("参数不完整");
+      const destBucket = toBucket || bucket;
+      const type = isCopy ? "copy" : "move";
+      const action = isCopy ? "复制" : "移动";
+      const label =
+        uniqKeys.length === 1 ? String(uniqKeys[0]) : `${uniqKeys.length} 项`;
+      const destLabel = `oss://${destBucket}/${toPrefix || ""}`;
+      const job = this.createJob({
+        type,
         bucket,
-        keys: [...keys],
-        toBucket: destBucket,
-        toPrefix: toPrefix || "",
-        fromPrefix: fromPrefix || "",
-        region: region || "",
-        toRegion: toRegion || region || "",
-        isCopy: !!isCopy,
-      },
+        region: region || getCachedBucketRegion(bucket),
+        key: `${action} ${label} → ${destLabel}`,
+        localPath: "",
+        size: 0,
+        moveParams: {
+          bucket,
+          keys: uniqKeys,
+          toBucket: destBucket,
+          toPrefix: toPrefix || "",
+          fromPrefix: fromPrefix || "",
+          region: region || "",
+          toRegion: toRegion || region || "",
+          isCopy: !!isCopy,
+        },
+      });
+      this.persistSoon();
+      this.pump();
+      return { jobs: [job] };
     });
-    this.persistSoon();
-    this.pump();
-    return { jobs: [job] };
   }
 
   async enqueueDownload({ bucket, keys, localDir, region, stripPrefix = "" }) {
-    const jobs = [];
-    const r = region || getCachedBucketRegion(bucket);
-    const { auth, client: serviceClient } = this.getState();
-    if (!auth) throw new Error("请先登录");
-    const client = await createBucketClient(auth, bucket, r, serviceClient);
-    const base = String(stripPrefix || "");
+    return this._withEnqueueLock("download", async () => {
+      const jobs = [];
+      const r = region || getCachedBucketRegion(bucket);
+      const { auth, client: serviceClient } = this.getState();
+      if (!auth) throw new Error("请先登录");
+      const client = await createBucketClient(auth, bucket, r, serviceClient);
+      const base = String(stripPrefix || "");
+      const seenKeys = new Set();
+      const inputKeys = [
+        ...new Set(
+          (keys || []).map((k) => String(k || "").trim()).filter(Boolean),
+        ),
+      ];
 
-    const toLocal = (objectKey) => {
-      let rel = String(objectKey);
-      if (base && rel.startsWith(base)) rel = rel.slice(base.length);
-      rel = rel.replace(/^\/+/, "");
-      if (!rel) rel = objectKey.split("/").pop() || "download.bin";
-      return path.join(localDir, ...rel.split("/").filter(Boolean));
-    };
+      const toLocal = (objectKey) => {
+        let rel = String(objectKey);
+        if (base && rel.startsWith(base)) rel = rel.slice(base.length);
+        rel = rel.replace(/^\/+/, "");
+        if (!rel) rel = objectKey.split("/").pop() || "download.bin";
+        return path.join(localDir, ...rel.split("/").filter(Boolean));
+      };
 
-    for (const key of keys) {
-      if (String(key).endsWith("/")) {
-        let token;
-        let found = 0;
-        do {
-          const res = await client.listV2({
-            prefix: key,
-            "max-keys": 1000,
-            "continuation-token": token || undefined,
-          });
-          for (const o of res.objects || []) {
-            if (!o.name || o.name.endsWith("/")) continue;
-            found += 1;
-            jobs.push(
-              this.createJob({
-                type: "download",
-                bucket,
-                region: r,
-                key: o.name,
-                localPath: toLocal(o.name),
-                size: o.size || 0,
-              }),
-            );
-          }
-          token = res.isTruncated ? res.nextContinuationToken : "";
-        } while (token);
-        if (!found) {
-          const dirPath = toLocal(key);
-          fs.mkdirSync(dirPath, { recursive: true });
-        }
-      } else {
+      const addDownloadJob = (objectKey, size = 0) => {
+        const key = String(objectKey || "");
+        if (!key || key.endsWith("/") || seenKeys.has(key)) return false;
+        seenKeys.add(key);
+        this.removeDownloadJobsForKey(bucket, key);
         jobs.push(
           this.createJob({
             type: "download",
@@ -395,27 +503,58 @@ export class TransferManager extends EventEmitter {
             region: r,
             key,
             localPath: toLocal(key),
-            size: 0,
+            size: size || 0,
           }),
         );
+        return true;
+      };
+
+      for (const key of inputKeys) {
+        if (String(key).endsWith("/")) {
+          let token;
+          let found = 0;
+          do {
+            const res = await client.listV2({
+              prefix: key,
+              "max-keys": 1000,
+              "continuation-token": token || undefined,
+            });
+            for (const o of res.objects || []) {
+              if (!o.name || o.name.endsWith("/")) continue;
+              if (addDownloadJob(o.name, o.size || 0)) found += 1;
+            }
+            token = res.isTruncated ? res.nextContinuationToken : "";
+          } while (token);
+          if (!found) {
+            const dirPath = toLocal(key);
+            fs.mkdirSync(dirPath, { recursive: true });
+          }
+        } else {
+          addDownloadJob(key, 0);
+        }
       }
-    }
-    if (!jobs.length) {
-      throw new Error("没有可下载的对象");
-    }
-    this.persistSoon();
-    this.pump();
-    return jobs;
+      this.dedupeDownloadJobsByKey(bucket);
+      const uniqueJobs = jobs.filter((j) => this.jobs.has(j.id));
+      if (!uniqueJobs.length) {
+        throw new Error("没有可下载的对象");
+      }
+      this.persistSoon();
+      this.pump();
+      return uniqueJobs;
+    });
   }
 
   async downloadNow({ bucket, keys, localDir, region, stripPrefix = "" }) {
-    const r = region || getCachedBucketRegion(bucket);
-    const { auth, client: serviceClient } = this.getState();
-    if (!auth) throw new Error("请先登录");
-    const client = await createBucketClient(auth, bucket, r, serviceClient);
+    // 走任务队列，前端传输面板可看到每个文件进度；完成后返回本地路径供拖出/剪贴板
+    const jobs = await this.enqueueDownload({
+      bucket,
+      keys,
+      localDir,
+      region,
+      stripPrefix,
+    });
+    const ids = jobs.map((j) => j.id);
     const base = String(stripPrefix || "");
-    fs.mkdirSync(localDir, { recursive: true });
-
     const toLocal = (objectKey) => {
       let rel = String(objectKey);
       if (base && rel.startsWith(base)) rel = rel.slice(base.length);
@@ -424,45 +563,77 @@ export class TransferManager extends EventEmitter {
       return path.join(localDir, ...rel.split("/").filter(Boolean));
     };
 
-    const filePaths = [];
-    const rootItems = [];
-
-    for (const key of keys) {
-      if (String(key).endsWith("/")) {
-        const folderLocal = toLocal(key);
-        fs.mkdirSync(folderLocal, { recursive: true });
-        let token;
-        do {
-          const res = await client.listV2({
-            prefix: key,
-            "max-keys": 1000,
-            "continuation-token": token || undefined,
-          });
-          for (const o of res.objects || []) {
-            if (!o.name || o.name.endsWith("/")) continue;
-            const lp = toLocal(o.name);
-            fs.mkdirSync(path.dirname(lp), { recursive: true });
-            await client.get(o.name, lp);
-            fsyncPath(lp);
-            filePaths.push(lp);
+    const waitMs = 30 * 60 * 1000;
+    const started = Date.now();
+    await new Promise((resolve, reject) => {
+      const tick = () => {
+        if (Date.now() - started > waitMs) {
+          clearInterval(timer);
+          reject(new Error("下载超时，请改用下载按钮"));
+          return;
+        }
+        let pending = 0;
+        let errMsg = "";
+        for (const id of ids) {
+          const job = this.jobs.get(id);
+          if (!job) {
+            pending += 1;
+            continue;
           }
-          token = res.isTruncated ? res.nextContinuationToken : "";
-        } while (token);
-        rootItems.push(folderLocal);
-      } else {
-        const lp = toLocal(key);
-        fs.mkdirSync(path.dirname(lp), { recursive: true });
-        await client.get(key, lp);
-        fsyncPath(lp);
+          if (job.status === "failed") {
+            errMsg = job.error || "下载失败";
+            break;
+          }
+          if (job.status === "stopped") {
+            errMsg = job.error || "下载已取消";
+            break;
+          }
+          // 落盘后进入校验/完成即可用于拖出
+          if (job.status === "finished" || job.status === "verifying") continue;
+          if (
+            Number(job.progress) >= 100 &&
+            job.localPath &&
+            fs.existsSync(job.localPath)
+          ) {
+            continue;
+          }
+          pending += 1;
+        }
+        if (errMsg) {
+          clearInterval(timer);
+          reject(new Error(errMsg));
+          return;
+        }
+        if (pending === 0) {
+          clearInterval(timer);
+          resolve();
+        }
+      };
+      const timer = setInterval(tick, 150);
+      tick();
+    });
+
+    const rootItems = [];
+    for (const key of keys || []) {
+      const k = String(key || "").trim();
+      if (!k) continue;
+      rootItems.push(toLocal(k));
+    }
+    const filePaths = [];
+    for (const job of jobs) {
+      const lp = job.localPath;
+      if (lp && fs.existsSync(lp)) {
+        try {
+          fsyncPath(lp);
+        } catch {
+          /* ignore */
+        }
         filePaths.push(lp);
-        rootItems.push(lp);
       }
     }
-
     if (!rootItems.length && !filePaths.length) {
       throw new Error("没有可下载的对象");
     }
-
     return {
       paths: rootItems.length ? rootItems : filePaths,
       files: filePaths,
@@ -492,6 +663,21 @@ export class TransferManager extends EventEmitter {
   emitProgress(job) {
     if (!job || job.removed || !this.jobs.has(job.id)) return;
     job.updatedAt = Date.now();
+    // 高频进度节流，状态变化与 100% 必发，避免大批量时 SSE 积压导致完成数落后
+    if (!this._emitThrottle) this._emitThrottle = new Map();
+    const prev = this._emitThrottle.get(job.id) || {};
+    const now = Date.now();
+    const statusChanged = prev.status !== job.status;
+    const reachedDone =
+      Number(job.progress) >= 100 && Number(prev.progress || 0) < 100;
+    if (!statusChanged && !reachedDone && now - (prev.at || 0) < 250) {
+      return;
+    }
+    this._emitThrottle.set(job.id, {
+      status: job.status,
+      progress: job.progress,
+      at: now,
+    });
     this.emit("progress", { ...job });
     this.persistSoon();
   }
@@ -539,6 +725,18 @@ export class TransferManager extends EventEmitter {
 
     job.status = "running";
     job.aborted = false;
+    let slotReleased = false;
+    const releaseSlot = () => {
+      if (slotReleased) return;
+      slotReleased = true;
+      if (job.type === "upload")
+        this.runningUpload = Math.max(0, this.runningUpload - 1);
+      else if (job.type === "download") {
+        this.runningDownload = Math.max(0, this.runningDownload - 1);
+      } else if (job.type === "move" || job.type === "copy") {
+        this.runningMove = Math.max(0, this.runningMove - 1);
+      }
+    };
     if (job.type === "upload") this.runningUpload += 1;
     else if (job.type === "download") this.runningDownload += 1;
     else if (job.type === "move" || job.type === "copy") this.runningMove += 1;
@@ -600,19 +798,44 @@ export class TransferManager extends EventEmitter {
       if (job.aborted) {
         job.status = "stopped";
       } else {
-        job.status = "finished";
         job.progress = 100;
+        job.speed = 0;
         job.error = "";
-        job.finishedAt = Date.now();
-        job.checkpoint = null;
-        job.downloadParts = null;
-        appendHistory(job);
-        removePartsDir(job.id);
+        // 传输完成后先释放并发槽位，完整性校验不再占用「进行中」名额
+        releaseSlot();
+        this.pump();
+
+        const needVerify =
+          (job.type === "upload" || job.type === "download") &&
+          settings.autoVerifyIntegrity !== false &&
+          client &&
+          job.localPath;
+        if (needVerify) {
+          job.status = "verifying";
+          this.emitProgress(job);
+          await this.verifyAfterTransfer(job, client, settings);
+        }
+        if (job.aborted) {
+          job.status = "stopped";
+        } else {
+          job.status = "finished";
+          job.progress = 100;
+          job.error = "";
+          job.finishedAt = Date.now();
+          job.checkpoint = null;
+          job.downloadParts = null;
+          appendHistory(job);
+          removePartsDir(job.id);
+        }
       }
     } catch (err) {
       if (job.aborted || /已暂停/.test(err.message || "")) {
         job.status = "stopped";
-      } else if (!job.error || job.status === "running") {
+      } else if (
+        !job.error ||
+        job.status === "running" ||
+        job.status === "verifying"
+      ) {
         job.status = "failed";
         job.error = chineseErr(err);
         if (isTransientError(err) || isAuthError(err)) {
@@ -620,16 +843,11 @@ export class TransferManager extends EventEmitter {
         }
       }
     } finally {
-      if (job.type === "upload")
-        this.runningUpload = Math.max(0, this.runningUpload - 1);
-      else if (job.type === "download") {
-        this.runningDownload = Math.max(0, this.runningDownload - 1);
-      } else if (job.type === "move" || job.type === "copy") {
-        this.runningMove = Math.max(0, this.runningMove - 1);
-      }
+      releaseSlot();
       if (!job.removed && this.jobs.has(job.id)) {
         this.emitProgress(job);
       }
+      if (this._emitThrottle) this._emitThrottle.delete(job.id);
       this.persistSoon();
       this.pump();
     }
@@ -779,15 +997,7 @@ export class TransferManager extends EventEmitter {
       });
     }
 
-    // 上传/下载后完整性校验（优先 CRC64）
-    if (
-      (job.type === "upload" || job.type === "download") &&
-      settings.autoVerifyIntegrity !== false &&
-      client &&
-      job.localPath
-    ) {
-      await this.verifyAfterTransfer(job, client, settings);
-    }
+    // 完整性校验移至 runJob：传输完成后先计入完成并释放并发，再异步校验
   }
 
   async verifyAfterTransfer(job, client, settings) {

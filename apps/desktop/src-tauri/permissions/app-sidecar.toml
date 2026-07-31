@@ -10,8 +10,14 @@ commands.allow = [
   "get_drag_icon_path",
   "copy_paths_to_dir",
   "paths_exist",
+  "folder_under_cursor",
+  "await_drop_folder_path",
+  "write_text_file",
+  "read_text_file",
   "get_app_autostart",
   "set_app_autostart",
+  "get_allow_multiple_instances",
+  "set_allow_multiple_instances",
   "quit_app",
   "hide_to_tray"
 ]

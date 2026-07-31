@@ -112,8 +112,12 @@ export function saveJobsToDisk(jobs) {
     if (!job || job.removed) continue;
     if (job.status === "finished") continue;
     const row = serializeJob(job);
-    // 落盘时 running → stopped，重启后可安全续传
-    if (row.status === "running" || row.status === "waiting") {
+    // 落盘时 running/verifying/waiting → stopped，重启后可安全续传
+    if (
+      row.status === "running" ||
+      row.status === "waiting" ||
+      row.status === "verifying"
+    ) {
       row.status = "stopped";
       row.error = row.error || "应用退出后待续传";
     }

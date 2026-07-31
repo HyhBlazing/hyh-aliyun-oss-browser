@@ -1,5 +1,17 @@
 <template>
-  <a-modal :visible="visible" :footer="false" width="920px" unmount-on-close modal-class="global-search-modal" @cancel="emit('update:visible', false)" @update:visible="emit('update:visible', $event)">
+  <a-modal
+    :visible="visible"
+    :footer="false"
+    width="60vw"
+    top="10vh"
+    :fullscreen="false"
+    unmount-on-close
+    modal-class="global-search-modal"
+    :modal-style="modalStyle"
+    :body-style="bodyStyle"
+    @cancel="emit('update:visible', false)"
+    @update:visible="emit('update:visible', $event)"
+  >
     <template #title>
       <div class="gs-title">
         <span class="gs-title-main">
@@ -191,6 +203,30 @@ const emit = defineEmits<{
     items: SearchHit[]
   ): void;
 }>();
+
+const modalStyle = {
+  width: "60vw",
+  maxWidth: "60vw",
+  height: "80vh",
+  maxHeight: "80vh",
+  top: "10vh",
+  margin: "0 auto",
+  overflow: "hidden",
+  display: "flex",
+  flexDirection: "column" as const,
+  borderRadius: "12px",
+};
+
+const bodyStyle = {
+  flex: "1",
+  minHeight: "0",
+  height: "auto",
+  maxHeight: "none",
+  overflow: "hidden",
+  padding: "12px 20px 16px",
+  display: "flex",
+  flexDirection: "column" as const,
+};
 
 const form = reactive({
   mode: "index" as "live" | "index",
@@ -704,6 +740,11 @@ function emitBatch(action: "download" | "delete" | "address" | "verify" | "open"
   display: flex;
   flex-direction: column;
   gap: 12px;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .mode-row .hint {
@@ -746,6 +787,11 @@ function emitBatch(action: "download" | "delete" | "address" | "verify" | "open"
   margin-bottom: 10px;
 }
 
+/* a-row gutter 负边距易撑出横向滚动条 */
+.filters :deep(.arco-row) {
+  max-width: 100%;
+}
+
 .search-actions {
   display: flex;
   align-items: center;
@@ -775,5 +821,50 @@ function emitBatch(action: "download" | "delete" | "address" | "verify" | "open"
   cursor: pointer;
   padding: 0 4px;
   font-size: 12px;
+}
+</style>
+
+<style>
+/* Modal 挂到 body，需非 scoped 才能命中 */
+.arco-modal-wrapper:has(.arco-modal.global-search-modal) {
+  overflow: hidden !important;
+}
+
+.arco-modal.global-search-modal {
+  width: 60vw !important;
+  max-width: 60vw !important;
+  height: 80vh !important;
+  max-height: 80vh !important;
+  top: 10vh !important;
+  margin: 0 auto !important;
+  overflow: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+  border-radius: 12px;
+  box-sizing: border-box;
+}
+
+.arco-modal.global-search-modal .arco-modal-header {
+  flex-shrink: 0;
+}
+
+.arco-modal.global-search-modal .arco-modal-body {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.arco-modal.global-search-modal .arco-modal-body > * {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.arco-modal.global-search-modal .arco-table-container {
+  overflow-x: hidden !important;
 }
 </style>

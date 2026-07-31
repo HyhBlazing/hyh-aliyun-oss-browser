@@ -58,6 +58,27 @@
               <a-form-item>
                 <template #label>
                   <span class="field-label">
+                    允许打开多个实例
+                    <a-tooltip content="关闭（默认）：程序已在运行时再次打开，会直接显示已有主界面。开启：每次启动都会打开新的实例。修改后需重新启动应用生效。">
+                      <icon-exclamation-circle class="label-tip" />
+                    </a-tooltip>
+                  </span>
+                </template>
+                <a-switch v-model="allowMultipleInstances" :disabled="!multiInstanceSupported" />
+                <p class="path-hint muted">
+                  {{
+                    multiInstanceSupported
+                      ? allowMultipleInstances
+                        ? "已开启多实例：再次启动会打开新窗口（下次启动生效）"
+                        : "单实例模式：再次启动将直接打开已有主界面（下次启动生效）"
+                      : "当前环境不支持该设置，请在桌面客户端中使用"
+                  }}
+                </p>
+              </a-form-item>
+
+              <a-form-item>
+                <template #label>
+                  <span class="field-label">
                     界面缩放
                     <a-tooltip content="调整界面显示比例，范围 90%～125%。保存后生效并记住本机设置。">
                       <icon-exclamation-circle class="label-tip" />
@@ -75,7 +96,6 @@
                   <a-input-number v-model="uiZoom" class="zoom-input" :min="UI_ZOOM_MIN" :max="UI_ZOOM_MAX" :step="UI_ZOOM_STEP" hide-button @change="onZoomPreview" />
                   <span class="zoom-unit">%</span>
                 </div>
-                <p class="path-hint muted">最小 90%，最大 125%；可用 − / + 或滑块调节</p>
               </a-form-item>
 
               <a-form-item>
@@ -177,13 +197,7 @@
                   <a-switch v-model="form.searchAutoIndexDailyEnabled" />
                 </a-form-item>
                 <a-form-item label="每天执行时间">
-                  <a-time-picker
-                    v-model="form.searchAutoIndexTime"
-                    format="HH:mm"
-                    :disabled="!form.searchAutoIndexDailyEnabled"
-                    style="width: 100%"
-                    @change="(v: unknown) => (form.searchAutoIndexTime = normalizeAutoIndexTime(v))"
-                  />
+                  <a-time-picker v-model="form.searchAutoIndexTime" format="HH:mm" :disabled="!form.searchAutoIndexDailyEnabled" style="width: 100%" @change="(v: unknown) => (form.searchAutoIndexTime = normalizeAutoIndexTime(v))" />
                 </a-form-item>
                 <a-form-item>
                   <template #label>
@@ -316,6 +330,10 @@ import {
 } from "../lib/close-strategy";
 import { getAutoStartEnabled, setAutoStartEnabled } from "../lib/autostart";
 import {
+  getAllowMultipleInstances,
+  setAllowMultipleInstances,
+} from "../lib/multi-instance";
+import {
   UI_ZOOM_MAX,
   UI_ZOOM_MIN,
   UI_ZOOM_STEP,
@@ -328,7 +346,7 @@ import {
 const LS_SHOW_THUMB = "hyh-oss-show-thumb";
 const APP_NAME = "hyh-aliyun-oss-browser";
 /** 与 apps/desktop/package.json version 保持一致 */
-const APP_VERSION = "3.0.6";
+const APP_VERSION = "3.0.7";
 const GITHUB_RELEASES_URL =
   "https://github.com/HyhBlazing/hyh-aliyun-oss-browser/releases";
 const GITHUB_LATEST_API =
@@ -377,6 +395,8 @@ const downloadMode = ref<DownloadDirMode>("ask");
 const closeStrategy = ref<CloseStrategy>("ask");
 const autoStart = ref(false);
 const autoStartSupported = ref(false);
+const allowMultipleInstances = ref(false);
+const multiInstanceSupported = ref(false);
 const uiZoom = ref(getUiZoomPercent());
 const zoomSaved = ref(false);
 const appName = APP_NAME;
@@ -387,7 +407,7 @@ const remoteError = ref("");
 
 const form = reactive({
   maxUploadJobCount: 50,
-  maxDownloadJobCount: 100,
+  maxDownloadJobCount: 50,
   connectTimeout: 60000,
   uploadPartSize: 10,
   downloadConcurrecyPartSize: 5,
@@ -456,13 +476,24 @@ async function fetchRemoteVersion() {
     const res = await fetch(GITHUB_LATEST_API, {
       headers: { Accept: "application/vnd.github+json" },
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    // 仓库尚无正式发布时 GitHub 返回 404，属正常情况
+    if (res.status === 404) {
+      remoteVersion.value = "";
+      remoteError.value = "暂无发布版本";
+      return;
+    }
+    if (!res.ok) {
+      remoteVersion.value = "";
+      remoteError.value =
+        res.status === 403 ? "检查更新受限，请稍后重试" : `检查更新失败（${res.status}）`;
+      return;
+    }
     const json = (await res.json()) as { tag_name?: string; name?: string };
     const tag = String(json.tag_name || json.name || "").trim();
     remoteVersion.value = tag.replace(/^v/i, "") || "";
     if (!remoteVersion.value) remoteError.value = "暂无版本信息";
   } catch {
-    remoteError.value = "获取失败";
+    remoteError.value = "网络异常，无法检查更新";
     remoteVersion.value = "";
   } finally {
     remoteLoading.value = false;
@@ -501,11 +532,19 @@ onMounted(async () => {
   uiZoom.value = getUiZoomPercent();
   zoomSaved.value = false;
   autoStartSupported.value = isTauri();
+  multiInstanceSupported.value = isTauri();
   if (autoStartSupported.value) {
     try {
       autoStart.value = await getAutoStartEnabled();
     } catch {
       autoStart.value = false;
+    }
+  }
+  if (multiInstanceSupported.value) {
+    try {
+      allowMultipleInstances.value = await getAllowMultipleInstances();
+    } catch {
+      allowMultipleInstances.value = false;
     }
   }
   void fetchRemoteVersion();
@@ -643,6 +682,21 @@ async function onSave() {
         return;
       }
     }
+    if (multiInstanceSupported.value) {
+      try {
+        await setAllowMultipleInstances(!!allowMultipleInstances.value);
+      } catch (e) {
+        const msg =
+          e instanceof Error && e.message
+            ? e.message
+            : typeof e === "string"
+              ? e
+              : "设置多实例失败";
+        Message.error(msg);
+        activeTab.value = "app";
+        return;
+      }
+    }
     await settings.save(payload);
     emit("saved");
   } catch (e) {
@@ -686,7 +740,7 @@ async function onSave() {
 
 .tab-pane-scroll {
   height: 100%;
-  max-height: min(560px, calc(100vh - 220px));
+  max-height: none;
   overflow: auto;
   padding-right: 4px;
 }

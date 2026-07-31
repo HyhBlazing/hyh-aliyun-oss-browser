@@ -1,22 +1,9 @@
 <template>
-  <a-modal
-    :visible="visible"
-    title="新建文件夹"
-    :ok-loading="loading"
-    unmount-on-close
-    @ok="onOk"
-    @cancel="emit('update:visible', false)"
-    @update:visible="emit('update:visible', $event)"
-  >
+  <a-modal :visible="visible" title="新建文件夹" :ok-loading="loading" unmount-on-close @ok="onOk" @cancel="emit('update:visible', false)" @update:visible="emit('update:visible', $event)" @open="focusNameInput">
     <a-form :model="formStub" layout="vertical">
       <a-form-item label="文件夹名称" required>
         <div class="field">
-          <a-input
-            v-model="name"
-            placeholder="不含 / 的目录名"
-            allow-clear
-            @press-enter="onOk"
-          />
+          <a-input ref="nameInputRef" v-model="name" placeholder="不含 / 的目录名" allow-clear @press-enter="onOk" />
           <p class="hint muted">将创建为 {{ previewPath }}</p>
         </div>
       </a-form-item>
@@ -25,7 +12,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { api } from "../api/client";
 
@@ -44,6 +31,7 @@ const emit = defineEmits<{
 const name = ref("");
 const loading = ref(false);
 const formStub = {};
+const nameInputRef = ref<{ focus?: () => void; $el?: HTMLElement } | null>(null);
 
 const previewPath = computed(() => {
   const base = props.prefix || "";
@@ -51,10 +39,29 @@ const previewPath = computed(() => {
   return n ? `${base}${n}/` : `${base}<名称>/`;
 });
 
+function focusNameInput() {
+  void nextTick(() => {
+    // 等模态动画/焦点锁完成后再抢焦点
+    window.setTimeout(() => {
+      const comp = nameInputRef.value;
+      if (comp?.focus) {
+        comp.focus();
+        return;
+      }
+      const input = comp?.$el?.querySelector?.("input") as HTMLInputElement | null;
+      input?.focus();
+      input?.select();
+    }, 40);
+  });
+}
+
 watch(
   () => props.visible,
   (v) => {
-    if (v) name.value = "";
+    if (v) {
+      name.value = "";
+      focusNameInput();
+    }
   }
 );
 
@@ -62,10 +69,12 @@ async function onOk() {
   const n = (name.value || "").trim();
   if (!n) {
     Message.warning("请输入文件夹名称");
+    focusNameInput();
     return;
   }
   if (n.includes("/") || n.includes("\\")) {
     Message.warning("文件夹名称不能包含 /");
+    focusNameInput();
     return;
   }
   loading.value = true;
@@ -90,12 +99,14 @@ async function onOk() {
 .field {
   width: 100%;
 }
+
 .hint {
   margin: 8px 0 0;
   font-size: 12px;
   line-height: 1.4;
   word-break: break-all;
 }
+
 .muted {
   color: #8e8e93;
 }

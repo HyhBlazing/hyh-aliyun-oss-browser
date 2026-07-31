@@ -1,6 +1,6 @@
 [package]
 name = "hyh-oss-browser"
-version = "3.0.6"
+version = "3.0.7"
 description = "hyh-aliyun-oss-browser (Tauri)"
 authors = ["HyhBlazing"]
 license = "Apache-2.0"
@@ -10,6 +10,10 @@ rust-version = "1.77.2"
 [lib]
 name = "hyh_oss_browser_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+# MSVC 链接 dll 时会打印「正在创建库 ….dll.lib」信息，属正常输出，忽略即可
+[lints.rust]
+linker_messages = "allow"
 
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }
@@ -28,6 +32,22 @@ dirs = "6"
 tauri-plugin-drag = "2.1.1"
 tauri-plugin-autostart = "2"
 
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-single-instance = "2"
+
 [target.'cfg(windows)'.dependencies]
 clipboard-win = { version = "5.4", features = ["std"] }
 winreg = "0.55"
+# 与 tauri/wry 对齐，用于拦截 WebView2 的 Ctrl+C/V/X（否则不会到达前端）
+webview2-com = "0.38"
+# 拖放到资源管理器时解析光标下的文件夹路径
+windows = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_Shell",
+  "Win32_UI_Shell_Common",
+  "Win32_System_Com",
+  "Win32_System_Ole",
+  "Win32_System_Variant",
+] }

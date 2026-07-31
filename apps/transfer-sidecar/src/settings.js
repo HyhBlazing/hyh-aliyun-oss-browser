@@ -7,7 +7,7 @@ const FILE = path.join(DIR, "settings.json");
 
 const DEFAULTS = {
   maxUploadJobCount: 50,
-  maxDownloadJobCount: 100,
+  maxDownloadJobCount: 50,
   overwriteSameName: true,
   connectTimeout: 60000,
   uploadPartSize: 10,

@@ -39,7 +39,7 @@ async function request<T>(
   method: string,
   path: string,
   body?: unknown,
-  opts?: { signal?: AbortSignal; retried?: boolean }
+  opts?: { signal?: AbortSignal; retried?: boolean },
 ): Promise<ApiResult<T>> {
   const retried = !!opts?.retried;
   let res: Response;
@@ -70,12 +70,21 @@ async function request<T>(
     if (opts?.signal?.aborted) {
       throw new DOMException("已取消", "AbortError");
     }
-    throw new Error(`请求失败 (${res.status})`);
+    if (res.status === 404) {
+      throw new Error("接口不存在或服务未就绪，请重启应用后再试");
+    }
+    if (res.status === 401 || res.status === 403) {
+      throw new Error("未登录或没有权限");
+    }
+    throw new Error(`请求失败（${res.status}）`);
   }
 
   if ((!res.ok || json.code !== 0) && isNeedLogin(res.status, json.message)) {
+    // 仅对只读请求自动重登重试；写操作重试会导致重复入队/重复变更
+    const safeRetry = method === "GET" || method === "HEAD";
     if (
       !retried &&
+      safeRetry &&
       path !== "/auth/login" &&
       path !== "/auth/logout" &&
       restoreAuthHandler
@@ -89,10 +98,18 @@ async function request<T>(
 
   if (!res.ok || json.code !== 0) {
     const raw = String(json.message || "");
-    if (/Route\s+\w+:\/.+not found/i.test(raw) || /接口不存在/.test(raw)) {
-      throw new Error("搜索服务未就绪，请完全退出应用后重新打开再试");
+    if (
+      /Route\s+\w+:\/.+not found/i.test(raw) ||
+      /接口不存在/.test(raw) ||
+      res.status === 404
+    ) {
+      throw new Error(
+        raw && !/not found/i.test(raw)
+          ? raw
+          : "接口不存在或服务未就绪，请完全退出应用后重新打开再试",
+      );
     }
-    throw new Error(raw || `请求失败 (${res.status})`);
+    throw new Error(raw || `请求失败（${res.status}）`);
   }
   return json;
 }
@@ -115,7 +132,7 @@ export const api = {
   },
   listObjects: (query: Record<string, string | number>) => {
     const qs = new URLSearchParams(
-      Object.entries(query).map(([k, v]) => [k, String(v)])
+      Object.entries(query).map(([k, v]) => [k, String(v)]),
     ).toString();
     return request("GET", `/objects?${qs}`);
   },
@@ -143,7 +160,7 @@ export const api = {
     request("POST", "/objects/verify/batch", payload),
   searchObjects: (
     payload: Record<string, unknown>,
-    opts?: { signal?: AbortSignal }
+    opts?: { signal?: AbortSignal },
   ) =>
     request<{
       items: Record<string, unknown>[];
@@ -179,13 +196,10 @@ export const api = {
   getSearchIndexJob: (id: string) =>
     request<Record<string, unknown>>(
       "GET",
-      `/search/index/jobs/${encodeURIComponent(id)}`
+      `/search/index/jobs/${encodeURIComponent(id)}`,
     ),
   cancelSearchIndexJob: (id: string) =>
-    request(
-      "POST",
-      `/search/index/jobs/${encodeURIComponent(id)}/cancel`
-    ),
+    request("POST", `/search/index/jobs/${encodeURIComponent(id)}/cancel`),
   restoreObjects: (payload: Record<string, unknown>) =>
     request("POST", "/objects/restore", payload),
   putSymlink: (payload: Record<string, unknown>) =>
@@ -198,23 +212,30 @@ export const api = {
     const qs = region ? `?region=${encodeURIComponent(region)}` : "";
     return request<{ acl: string }>(
       "GET",
-      `/buckets/${encodeURIComponent(name)}/acl${qs}`
+      `/buckets/${encodeURIComponent(name)}/acl${qs}`,
     );
   },
   putBucketAcl: (name: string, payload: Record<string, unknown>) =>
     request("PUT", `/buckets/${encodeURIComponent(name)}/acl`, payload),
-  listMultipart: (name: string, query: Record<string, string | number> = {}) => {
+  listMultipart: (
+    name: string,
+    query: Record<string, string | number> = {},
+  ) => {
     const qs = new URLSearchParams(
-      Object.entries(query).map(([k, v]) => [k, String(v)])
+      Object.entries(query).map(([k, v]) => [k, String(v)]),
     ).toString();
     const suffix = qs ? `?${qs}` : "";
     return request<{ list: Record<string, unknown>[] }>(
       "GET",
-      `/buckets/${encodeURIComponent(name)}/multipart${suffix}`
+      `/buckets/${encodeURIComponent(name)}/multipart${suffix}`,
     );
   },
   abortMultipart: (name: string, payload: Record<string, unknown>) =>
-    request("POST", `/buckets/${encodeURIComponent(name)}/multipart/abort`, payload),
+    request(
+      "POST",
+      `/buckets/${encodeURIComponent(name)}/multipart/abort`,
+      payload,
+    ),
   copyObject: (payload: Record<string, unknown>) =>
     request("POST", "/objects/copy", payload),
   moveObjects: (payload: Record<string, unknown>) =>
@@ -226,7 +247,7 @@ export const api = {
     request<{ url: string; expires: number; domain?: string }>(
       "POST",
       "/objects/sign",
-      payload
+      payload,
     ),
   getObjectAddress: (payload: Record<string, unknown>) =>
     request<{
@@ -259,7 +280,7 @@ export const api = {
     const qs = new URLSearchParams(query).toString();
     return request<{ content: string; contentType: string; size: number }>(
       "GET",
-      `/objects/content?${qs}`
+      `/objects/content?${qs}`,
     );
   },
   upload: (payload: Record<string, unknown>) =>
@@ -270,7 +291,7 @@ export const api = {
     request<{ paths: string[]; files: string[] }>(
       "POST",
       "/transfer/download-now",
-      payload
+      payload,
     ),
   listJobs: () => request("GET", "/transfer/jobs"),
   pauseJob: (id: string) => request("POST", "/transfer/jobs/pause", { id }),

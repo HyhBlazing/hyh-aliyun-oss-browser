@@ -16,6 +16,8 @@ apps/**/node_modules
 apps/**/dist
 apps/desktop/src-tauri/target
 apps/desktop/src-tauri/gen
+# 本机 cargo 配置（如自定义 target-dir），勿提交
+apps/desktop/src-tauri/.cargo/
 apps/desktop/src-tauri/resources/
 apps/desktop/src-tauri/binaries/transfer-sidecar-*
 apps/transfer-sidecar/dist/
