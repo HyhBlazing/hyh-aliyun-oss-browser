@@ -955,7 +955,7 @@ function applyRowSelect(
   browser.selected = selectedKeys.value.map(String);
 }
 
-function onObjectPropClick(record: { name: string }, ev: Event) {
+function onObjectRowClick(record: { name: string }, ev: Event) {
   const e = ev as MouseEvent;
   const target = e.target as HTMLElement | null;
   if (!target) return;
